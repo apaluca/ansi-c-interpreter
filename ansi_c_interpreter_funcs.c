@@ -14,39 +14,32 @@ int debug = 1;               /* debug flag */
 /* Type system helper functions */
 void settype(struct symbol *sym, enum value_type type)
 {
+    printf("DEBUG: Setting type for symbol %s\n", sym->name);
     // Only set type if it hasn't been set before
     if (sym->type != type)
     {
-        if (debug)
-        {
-            printf("Setting type of %s to ", sym->name);
-            switch (type)
-            {
-            case TYPE_INT:
-                printf("INT\n");
-                break;
-            case TYPE_FLOAT:
-                printf("FLOAT\n");
-                break;
-            case TYPE_DOUBLE:
-                printf("DOUBLE\n");
-                break;
-            }
-        }
+        printf("DEBUG: Changing type from %d to %d\n", sym->type, type);
         sym->type = type;
         // Initialize value to 0 of the appropriate type
         switch (type)
         {
         case TYPE_INT:
+            printf("DEBUG: Initializing as INT\n");
             sym->value.i_val = 0;
             break;
         case TYPE_FLOAT:
+            printf("DEBUG: Initializing as FLOAT\n");
             sym->value.f_val = 0.0f;
             break;
         case TYPE_DOUBLE:
+            printf("DEBUG: Initializing as DOUBLE\n");
             sym->value.d_val = 0.0;
             break;
         }
+    }
+    else
+    {
+        printf("DEBUG: Type unchanged\n");
     }
 }
 
@@ -59,9 +52,9 @@ enum value_type promote_types(enum value_type t1, enum value_type t2)
     return TYPE_INT;
 }
 
-void convert_value(void *dest, enum value_type dest_type,
-                   void *src, enum value_type src_type)
+void convert_value(void *dest, enum value_type dest_type, void *src, enum value_type src_type)
 {
+    printf("DEBUG: Converting from type %d to type %d\n", src_type, dest_type);
     union value_union *s = (union value_union *)src;
     union value_union *d = (union value_union *)dest;
 
@@ -79,9 +72,11 @@ void convert_value(void *dest, enum value_type dest_type,
         {
         case TYPE_FLOAT:
             d->f_val = (float)s->i_val;
+            printf("DEBUG: Converted int %d to float %f\n", s->i_val, d->f_val);
             break;
         case TYPE_DOUBLE:
             d->d_val = (double)s->i_val;
+            printf("DEBUG: Converted int %d to double %g\n", s->i_val, d->d_val);
             break;
         }
         break;
@@ -90,9 +85,11 @@ void convert_value(void *dest, enum value_type dest_type,
         {
         case TYPE_INT:
             d->i_val = (int)s->f_val;
+            printf("DEBUG: Converted float %f to int %d\n", s->f_val, d->i_val);
             break;
         case TYPE_DOUBLE:
             d->d_val = (double)s->f_val;
+            printf("DEBUG: Converted float %f to double %g\n", s->f_val, d->d_val);
             break;
         }
         break;
@@ -101,9 +98,11 @@ void convert_value(void *dest, enum value_type dest_type,
         {
         case TYPE_INT:
             d->i_val = (int)s->d_val;
+            printf("DEBUG: Converted double %g to int %d\n", s->d_val, d->i_val);
             break;
         case TYPE_FLOAT:
             d->f_val = (float)s->d_val;
+            printf("DEBUG: Converted double %g to float %f\n", s->d_val, d->f_val);
             break;
         }
         break;
@@ -122,19 +121,30 @@ static unsigned symhash(char *sym)
 
 struct symbol *lookup(char *sym)
 {
-    struct symbol *sp = &symtab[symhash(sym) % NHASH];
+    printf("DEBUG: Looking up symbol: %s\n", sym);
+    unsigned int hash = symhash(sym);
+    printf("DEBUG: Symbol hash: %u\n", hash);
+
+    struct symbol *sp = &symtab[hash % NHASH];
     int scount = NHASH;
 
     while (--scount >= 0)
     {
         if (sp->name && !strcmp(sp->name, sym))
         {
+            printf("DEBUG: Found existing symbol: %s\n", sp->name);
             return sp;
         }
 
         if (!sp->name)
         {
+            printf("DEBUG: Creating new symbol: %s\n", sym);
             sp->name = strdup(sym);
+            if (!sp->name)
+            {
+                printf("ERROR: Memory allocation failed for symbol name\n");
+                abort();
+            }
             sp->type = TYPE_DOUBLE; // Default type until declared
             sp->value.d_val = 0;
             sp->func = NULL;
@@ -145,15 +155,17 @@ struct symbol *lookup(char *sym)
         if (++sp >= symtab + NHASH)
             sp = symtab;
     }
-    yyerror("symbol table overflow\n");
+    printf("ERROR: Symbol table overflow\n");
+    error("symbol table overflow\n");
     abort();
 }
+
 struct symlist *newsymlist(struct symbol *sym, struct symlist *next)
 {
     struct symlist *sl = malloc(sizeof(struct symlist));
     if (!sl)
     {
-        yyerror("out of space");
+        error("out of space");
         exit(0);
     }
     sl->sym = sym;
@@ -167,7 +179,7 @@ struct ast *newast(int nodetype, struct ast *l, struct ast *r)
     struct ast *a = malloc(sizeof(struct ast));
     if (!a)
     {
-        yyerror("out of space");
+        error("out of space");
         exit(0);
     }
     a->nodetype = nodetype;
@@ -198,7 +210,7 @@ struct ast *newdecl(struct symbol *s)
     struct ast *a = malloc(sizeof(struct ast));
     if (!a)
     {
-        yyerror("out of space");
+        error("out of space");
         exit(0);
     }
     a->nodetype = 'D';      // D for declaration
@@ -213,7 +225,7 @@ struct ast *newnum(enum value_type type, union value_union value)
     struct numval *a = malloc(sizeof(struct numval));
     if (!a)
     {
-        yyerror("out of space");
+        error("out of space");
         exit(0);
     }
     a->nodetype = 'K';
@@ -228,7 +240,7 @@ struct ast *newcmp(int cmptype, struct ast *l, struct ast *r)
     struct ast *a = malloc(sizeof(struct ast));
     if (!a)
     {
-        yyerror("out of space");
+        error("out of space");
         exit(0);
     }
     a->nodetype = '0' + cmptype;
@@ -243,7 +255,7 @@ struct ast *newfunc(int functype, struct ast *l)
     struct fncall *a = malloc(sizeof(struct fncall));
     if (!a)
     {
-        yyerror("out of space");
+        error("out of space");
         exit(0);
     }
     a->nodetype = 'F';
@@ -258,7 +270,7 @@ struct ast *newcall(struct symbol *s, struct ast *l)
     struct ufncall *a = malloc(sizeof(struct ufncall));
     if (!a)
     {
-        yyerror("out of space");
+        error("out of space");
         exit(0);
     }
     a->nodetype = 'C';
@@ -273,7 +285,7 @@ struct ast *newref(struct symbol *s)
     struct symref *a = malloc(sizeof(struct symref));
     if (!a)
     {
-        yyerror("out of space");
+        error("out of space");
         exit(0);
     }
     a->nodetype = 'N';
@@ -287,7 +299,7 @@ struct ast *newasgn(struct symbol *s, struct ast *v)
     struct symasgn *a = malloc(sizeof(struct symasgn));
     if (!a)
     {
-        yyerror("out of space");
+        error("out of space");
         exit(0);
     }
     a->nodetype = '=';
@@ -303,7 +315,7 @@ struct ast *newflow(int nodetype, struct ast *cond, struct ast *tl, struct ast *
     struct flow *a = malloc(sizeof(struct flow));
     if (!a)
     {
-        yyerror("out of space");
+        error("out of space");
         exit(0);
     }
     a->nodetype = nodetype;
@@ -341,7 +353,7 @@ struct value eval(struct ast *a)
 
     if (!a)
     {
-        yyerror("internal error, null eval");
+        error("internal error, null eval");
         result.type = TYPE_INT;
         result.value.i_val = 0;
         return result;
@@ -469,7 +481,7 @@ struct value eval(struct ast *a)
             case '/':
                 if (temp2.i_val == 0)
                 {
-                    yyerror("division by zero");
+                    error("division by zero");
                     result.value.i_val = 0;
                 }
                 else
@@ -495,7 +507,7 @@ struct value eval(struct ast *a)
             case '/':
                 if (temp2.f_val == 0.0f)
                 {
-                    yyerror("division by zero");
+                    error("division by zero");
                     result.value.f_val = 0.0f;
                 }
                 else
@@ -521,7 +533,7 @@ struct value eval(struct ast *a)
             case '/':
                 if (temp2.d_val == 0.0)
                 {
-                    yyerror("division by zero");
+                    error("division by zero");
                     result.value.d_val = 0.0;
                 }
                 else
@@ -556,21 +568,38 @@ struct value eval(struct ast *a)
         return result;
     }
 
-    case 'M':
-    { // unary minus
+    case 'M': // unary minus
+    {
+        printf("DEBUG: Evaluating unary minus\n");
         v1 = eval(a->l);
         result.type = v1.type;
 
         switch (v1.type)
         {
         case TYPE_INT:
+            printf("DEBUG: Negating int value %d\n", v1.value.i_val);
             result.value.i_val = -v1.value.i_val;
             break;
         case TYPE_FLOAT:
+            printf("DEBUG: Negating float value %f\n", v1.value.f_val);
             result.value.f_val = -v1.value.f_val;
             break;
         case TYPE_DOUBLE:
+            printf("DEBUG: Negating double value %g\n", v1.value.d_val);
             result.value.d_val = -v1.value.d_val;
+            break;
+        }
+        printf("DEBUG: Unary minus result: ");
+        switch (result.type)
+        {
+        case TYPE_INT:
+            printf("%d\n", result.value.i_val);
+            break;
+        case TYPE_FLOAT:
+            printf("%f\n", result.value.f_val);
+            break;
+        case TYPE_DOUBLE:
+            printf("%g\n", result.value.d_val);
             break;
         }
         return result;
@@ -749,7 +778,7 @@ struct value eval(struct ast *a)
         case B_sqrt:
             if (temp.d_val < 0)
             {
-                yyerror("sqrt of negative number");
+                error("sqrt of negative number");
                 result.value.d_val = 0;
             }
             else
@@ -763,7 +792,7 @@ struct value eval(struct ast *a)
         case B_log:
             if (temp.d_val <= 0)
             {
-                yyerror("log of non-positive number");
+                error("log of non-positive number");
                 result.value.d_val = 0;
             }
             else
@@ -787,7 +816,7 @@ struct value eval(struct ast *a)
             result = v1;
             break;
         default:
-            yyerror("Unknown built-in function %d", f->functype);
+            error("Unknown built-in function %d", f->functype);
             result.value.d_val = 0;
         }
         return result;
@@ -798,7 +827,7 @@ struct value eval(struct ast *a)
         struct ufncall *f = (struct ufncall *)a;
         if (!f->s->func)
         {
-            yyerror("call to undefined function %s", f->s->name);
+            error("call to undefined function %s", f->s->name);
             result.type = TYPE_INT;
             result.value.i_val = 0;
             return result;
@@ -924,13 +953,13 @@ void treefree(struct ast *a)
         break;
 
     default:
-        printf("internal error: free bad node %c\n", a->nodetype);
+        error("internal error: free bad node %c\n", a->nodetype);
     }
 
     free(a); /* always free the node itself */
 }
 
-void yyerror(char *s, ...)
+void error(char *s, ...)
 {
     va_list ap;
     va_start(ap, s);
@@ -1046,6 +1075,12 @@ void dumpast(struct ast *a, int level)
         printf("bad %c\n", a->nodetype);
         return;
     }
+}
+
+void debug_print(const char *rule, const char *msg)
+{
+    printf("DEBUG: %s - %s\n", rule, msg);
+    fflush(stdout);
 }
 
 int main(void)

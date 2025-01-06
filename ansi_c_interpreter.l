@@ -2,80 +2,125 @@
 %{
 # include "ansi_c_interpreter.h"
 # include "ansi_c_interpreter.tab.h"
+int column = 0;
+void comment();
+void count();
+int check_type();
 %}
 
-/* float exponent */
-EXP    ([Ee][-+]?[0-9]+)
+D			[0-9]
+L			[a-zA-Z_]
+E			([Ee][+-]?{D}+)
+FS			(f|F|l|L)
+IS          ((u|U)|(u|U)?(l|L|ll|LL)|(l|L|ll|LL)(u|U))
 
 %%
- /* single character ops */
-"+" |
-"-" |
-"*" |
-"/" |
-"=" |
-"|" |
-"," |
-";" |
-"(" |
-")"     { return yytext[0]; }
+"/*"			{ comment(); }
+"//"[^\n]*      { /* consume //-comment */ }
 
- /* comparison ops */
-">"     { yylval.fn = 1; return CMP; }
-"<"     { yylval.fn = 2; return CMP; }
-"<>"    { yylval.fn = 3; return CMP; }
-"=="    { yylval.fn = 4; return CMP; }
-">="    { yylval.fn = 5; return CMP; }
-"<="    { yylval.fn = 6; return CMP; }
 
- /* keywords */
-"if"    { return IF; }
-"then"  { return THEN; }
-"else"  { return ELSE; }
-"while" { return WHILE; }
-"do"    { return DO; }
-"let"   { return LET; }
-"int"   { return TYPE_INT_T; }
-"float" { return TYPE_FLOAT_T; }
-"double" { return TYPE_DOUBLE_T; }
+"double"		{ count(); return(DOUBLE); }
+"else"			{ count(); return(ELSE); }
+"float"			{ count(); return(FLOAT); }
+"if"			{ count(); return(IF); }
+"int"			{ count(); return(INT); }
+"return"		{ count(); return(RETURN); }
+"void"			{ count(); return(VOID); }
+"while"			{ count(); return(WHILE); }
 
- /* built in functions */
-"sqrt"  { yylval.fn = B_sqrt; return FUNC; }
-"exp"   { yylval.fn = B_exp; return FUNC; }
-"log"   { yylval.fn = B_log; return FUNC; }
-"print" { yylval.fn = B_print; return FUNC; }
+{L}({L}|{D})*		{ 
+    count(); 
+    yylval.s = lookup(yytext);
+    return(IDENTIFIER); 
+}
 
- /* debug hack */
-"debug"[0-9]+ { debug = atoi(&yytext[5]); printf("debug set to %d\n", debug); }
-
- /* names */
-[a-zA-Z][a-zA-Z0-9]*  { yylval.s = lookup(yytext); return NAME; }
-
- /* numbers */
-[0-9]+      { 
+{D}+{IS}?		{ 
+    count();
     yylval.v.type = TYPE_INT;
-    yylval.v.value.i_val = atoi(yytext); 
-    return NUMBER; 
+    yylval.v.value.i_val = atoi(yytext);
+    printf("DEBUG: Scanned integer constant: %d\n", yylval.v.value.i_val);
+    return(CONSTANT); 
 }
 
-[0-9]+"."[0-9]*{EXP}?[fF] |
-"."?[0-9]+{EXP}?[fF]    { 
-    yylval.v.type = TYPE_FLOAT;
-    yylval.v.value.f_val = atof(yytext);
-    return NUMBER; 
-}
-
-[0-9]+"."[0-9]*{EXP}? |
-"."?[0-9]+{EXP}?    { 
+{D}+{E}{FS}?		{ 
+    count();
     yylval.v.type = TYPE_DOUBLE;
     yylval.v.value.d_val = atof(yytext);
-    return NUMBER; 
+    printf("DEBUG: Scanned float constant with exponent: %g\n", yylval.v.value.d_val);
+    return(CONSTANT);
 }
 
-"//".*  
-[ \t]   /* ignore white space */ 
-\\\n    printf("c> "); /* ignore line continuation */
-"\n"    { return EOL; }
+{D}*"."{D}+({E})?{FS}?	{ 
+    count();
+    yylval.v.type = TYPE_DOUBLE;
+    yylval.v.value.d_val = atof(yytext);
+    printf("DEBUG: Scanned float constant: %g\n", yylval.v.value.d_val);
+    return(CONSTANT);
+}
 
-.    { yyerror("Mystery character %c\n", *yytext); }
+{D}+"."{D}*({E})?{FS}?	{ 
+    count();
+    yylval.v.type = TYPE_DOUBLE;
+    yylval.v.value.d_val = atof(yytext);
+    printf("DEBUG: Scanned float constant: %g\n", yylval.v.value.d_val);
+    return(CONSTANT);
+}
+
+L?\"(\\.|[^\\"\n])*\"	{ count(); return(STRING_LITERAL); }
+
+"<="			{ count(); return(LE_OP); }
+">="			{ count(); return(GE_OP); }
+"=="			{ count(); return(EQ_OP); }
+"!="			{ count(); return(NE_OP); }
+";"			    { count(); return(';'); }
+("{"|"<%")		{ count(); return('{'); }
+("}"|"%>")		{ count(); return('}'); }
+","			    { count(); return(','); }
+"="			    { count(); return('='); }
+"("			    { count(); return('('); }
+")"			    { count(); return(')'); }
+"."			    { count(); return('.'); }
+"-"			    { count(); return('-'); }
+"+"			    { count(); return('+'); }
+"*"			    { count(); return('*'); }
+"/"			    { count(); return('/'); }
+"%"			    { count(); return('%'); }
+"<"			    { count(); return('<'); }
+">"			    { count(); return('>'); }
+
+[ \t\v\n\f]		{ count(); }
+.			    { /* Add code to complain about unmatched characters */ }
+
 %%
+
+void comment(void)
+{
+	char c, prev = 0;
+  
+	while ((c = input()) != 0)      /* (EOF maps to 0) */
+	{
+		if (c == '/' && prev == '*')
+			return;
+		prev = c;
+	}
+	error("unterminated comment");
+}
+
+void count(void)
+{
+	int i;
+
+	for (i = 0; yytext[i] != '\0'; i++)
+		if (yytext[i] == '\n')
+			column = 0;
+		else if (yytext[i] == '\t')
+			column += 8 - (column % 8);
+		else
+			column++;
+}
+
+int check_type(void)
+{
+    yylval.s = lookup(yytext);  /* Create/lookup symbol and store in yylval */
+    return IDENTIFIER;
+}
