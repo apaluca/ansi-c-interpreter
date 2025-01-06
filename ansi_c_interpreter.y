@@ -331,8 +331,9 @@ translation_unit
     ;
 
 external_declaration
-    : function_definition    { $$ = $1; }
+    : function_definition   { $$ = $1; }
     | declaration           { $$ = $1; }
+    | statement             { $$ = $1; }
     ;
 
 function_definition
