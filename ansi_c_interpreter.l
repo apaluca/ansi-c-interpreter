@@ -1,5 +1,3 @@
-/* recognize tokens for the interpreter */
-
 %option noyywrap nodefault yylineno
 %{
 # include "ansi_c_interpreter.h"
@@ -7,7 +5,7 @@
 %}
 
 /* float exponent */
-EXP	([Ee][-+]?[0-9]+)
+EXP    ([Ee][-+]?[0-9]+)
 
 %%
  /* single character ops */
@@ -31,13 +29,15 @@ EXP	([Ee][-+]?[0-9]+)
 "<="    { yylval.fn = 6; return CMP; }
 
  /* keywords */
-
 "if"    { return IF; }
 "then"  { return THEN; }
 "else"  { return ELSE; }
 "while" { return WHILE; }
 "do"    { return DO; }
-"let"   { return LET;}
+"let"   { return LET; }
+"int"   { return TYPE_INT_T; }
+"float" { return TYPE_FLOAT_T; }
+"double" { return TYPE_DOUBLE_T; }
 
  /* built in functions */
 "sqrt"  { yylval.fn = B_sqrt; return FUNC; }
@@ -51,13 +51,31 @@ EXP	([Ee][-+]?[0-9]+)
  /* names */
 [a-zA-Z][a-zA-Z0-9]*  { yylval.s = lookup(yytext); return NAME; }
 
+ /* numbers */
+[0-9]+      { 
+    yylval.v.type = TYPE_INT;
+    yylval.v.value.i_val = atoi(yytext); 
+    return NUMBER; 
+}
+
+[0-9]+"."[0-9]*{EXP}?[fF] |
+"."?[0-9]+{EXP}?[fF]    { 
+    yylval.v.type = TYPE_FLOAT;
+    yylval.v.value.f_val = atof(yytext);
+    return NUMBER; 
+}
+
 [0-9]+"."[0-9]*{EXP}? |
-"."?[0-9]+{EXP}? { yylval.d = atof(yytext); return NUMBER; }
+"."?[0-9]+{EXP}?    { 
+    yylval.v.type = TYPE_DOUBLE;
+    yylval.v.value.d_val = atof(yytext);
+    return NUMBER; 
+}
 
 "//".*  
 [ \t]   /* ignore white space */ 
 \\\n    printf("c> "); /* ignore line continuation */
 "\n"    { return EOL; }
 
-.	{ yyerror("Mystery character %c\n", *yytext); }
+.    { yyerror("Mystery character %c\n", *yytext); }
 %%

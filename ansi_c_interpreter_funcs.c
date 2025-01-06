@@ -1,499 +1,1055 @@
-/*
- * helper functions for the interpreter
- */
-#  include <stdio.h>
-#  include <stdlib.h>
-#  include <stdarg.h>
-#  include <string.h>
-#  include <math.h>
-#  include "ansi_c_interpreter.h"
+/* ansi_c_interpreter_funcs.c */
 
-int
-yyparse(void);
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <string.h>
+#include <math.h>
+#include "ansi_c_interpreter.h"
+
+/* Global variables */
+struct symbol symtab[NHASH]; /* symbol table */
+int debug = 1;               /* debug flag */
+
+/* Type system helper functions */
+void settype(struct symbol *sym, enum value_type type)
+{
+    // Only set type if it hasn't been set before
+    if (sym->type != type)
+    {
+        if (debug)
+        {
+            printf("Setting type of %s to ", sym->name);
+            switch (type)
+            {
+            case TYPE_INT:
+                printf("INT\n");
+                break;
+            case TYPE_FLOAT:
+                printf("FLOAT\n");
+                break;
+            case TYPE_DOUBLE:
+                printf("DOUBLE\n");
+                break;
+            }
+        }
+        sym->type = type;
+        // Initialize value to 0 of the appropriate type
+        switch (type)
+        {
+        case TYPE_INT:
+            sym->value.i_val = 0;
+            break;
+        case TYPE_FLOAT:
+            sym->value.f_val = 0.0f;
+            break;
+        case TYPE_DOUBLE:
+            sym->value.d_val = 0.0;
+            break;
+        }
+    }
+}
+
+enum value_type promote_types(enum value_type t1, enum value_type t2)
+{
+    if (t1 == TYPE_DOUBLE || t2 == TYPE_DOUBLE)
+        return TYPE_DOUBLE;
+    if (t1 == TYPE_FLOAT || t2 == TYPE_FLOAT)
+        return TYPE_FLOAT;
+    return TYPE_INT;
+}
+
+void convert_value(void *dest, enum value_type dest_type,
+                   void *src, enum value_type src_type)
+{
+    union value_union *s = (union value_union *)src;
+    union value_union *d = (union value_union *)dest;
+
+    if (dest_type == src_type)
+    {
+        memcpy(dest, src, (dest_type == TYPE_INT) ? sizeof(int) : (dest_type == TYPE_FLOAT) ? sizeof(float)
+                                                                                            : sizeof(double));
+        return;
+    }
+
+    switch (src_type)
+    {
+    case TYPE_INT:
+        switch (dest_type)
+        {
+        case TYPE_FLOAT:
+            d->f_val = (float)s->i_val;
+            break;
+        case TYPE_DOUBLE:
+            d->d_val = (double)s->i_val;
+            break;
+        }
+        break;
+    case TYPE_FLOAT:
+        switch (dest_type)
+        {
+        case TYPE_INT:
+            d->i_val = (int)s->f_val;
+            break;
+        case TYPE_DOUBLE:
+            d->d_val = (double)s->f_val;
+            break;
+        }
+        break;
+    case TYPE_DOUBLE:
+        switch (dest_type)
+        {
+        case TYPE_INT:
+            d->i_val = (int)s->d_val;
+            break;
+        case TYPE_FLOAT:
+            d->f_val = (float)s->d_val;
+            break;
+        }
+        break;
+    }
+}
 
 /* symbol table */
-/* hash a symbol */
-struct symbol symtab[NHASH];
-static unsigned
-symhash(char *sym)
+static unsigned symhash(char *sym)
 {
-  unsigned int hash = 0;
-  unsigned c;
-
-  while(c = *sym++) hash = hash*9 ^ c;
-
-  return hash;
+    unsigned int hash = 0;
+    unsigned c;
+    while ((c = *sym++))
+        hash = hash * 9 ^ c;
+    return hash;
 }
 
-struct symbol *
-lookup(char* sym)
+struct symbol *lookup(char *sym)
 {
-  struct symbol *sp = &symtab[symhash(sym)%NHASH];
-  int scount = NHASH;		/* how many have we looked at */
+    struct symbol *sp = &symtab[symhash(sym) % NHASH];
+    int scount = NHASH;
 
-  while(--scount >= 0) {
-    if(sp->name && !strcmp(sp->name, sym)) { return sp; }
+    while (--scount >= 0)
+    {
+        if (sp->name && !strcmp(sp->name, sym))
+        {
+            return sp;
+        }
 
-    if(!sp->name) {		/* new entry */
-      sp->name = strdup(sym);
-      sp->value = 0;
-      sp->func = NULL;
-      sp->syms = NULL;
-      return sp;
+        if (!sp->name)
+        {
+            sp->name = strdup(sym);
+            sp->type = TYPE_DOUBLE; // Default type until declared
+            sp->value.d_val = 0;
+            sp->func = NULL;
+            sp->syms = NULL;
+            return sp;
+        }
+
+        if (++sp >= symtab + NHASH)
+            sp = symtab;
+    }
+    yyerror("symbol table overflow\n");
+    abort();
+}
+struct symlist *newsymlist(struct symbol *sym, struct symlist *next)
+{
+    struct symlist *sl = malloc(sizeof(struct symlist));
+    if (!sl)
+    {
+        yyerror("out of space");
+        exit(0);
+    }
+    sl->sym = sym;
+    sl->next = next;
+    return sl;
+}
+
+/* AST building functions */
+struct ast *newast(int nodetype, struct ast *l, struct ast *r)
+{
+    struct ast *a = malloc(sizeof(struct ast));
+    if (!a)
+    {
+        yyerror("out of space");
+        exit(0);
+    }
+    a->nodetype = nodetype;
+    a->l = l;
+    a->r = r;
+
+    // Determine result type based on operands
+    if (l && r)
+    {
+        enum value_type lt = l->result_type;
+        enum value_type rt = r->result_type;
+        a->result_type = promote_types(lt, rt);
+    }
+    else if (l)
+    {
+        a->result_type = l->result_type;
+    }
+    else
+    {
+        a->result_type = TYPE_INT; // default type
     }
 
-    if(++sp >= symtab+NHASH) sp = symtab; /* try the next entry */
-  }
-  yyerror("symbol table overflow\n");
-  abort(); /* tried them all, table is full */
-
+    return a;
 }
 
-
-
-struct ast *
-newast(int nodetype, struct ast *l, struct ast *r)
+struct ast *newdecl(struct symbol *s)
 {
-  struct ast *a = malloc(sizeof(struct ast));
-  
-  if(!a) {
-    yyerror("out of space");
-    exit(0);
-  }
-  a->nodetype = nodetype;
-  a->l = l;
-  a->r = r;
-  return a;
+    struct ast *a = malloc(sizeof(struct ast));
+    if (!a)
+    {
+        yyerror("out of space");
+        exit(0);
+    }
+    a->nodetype = 'D';      // D for declaration
+    a->l = (struct ast *)s; // Store symbol pointer
+    a->r = NULL;
+    a->result_type = s->type; // Store declared type
+    return a;
 }
 
-struct ast *
-newnum(double d)
+struct ast *newnum(enum value_type type, union value_union value)
 {
-  struct numval *a = malloc(sizeof(struct numval));
-  
-  if(!a) {
-    yyerror("out of space");
-    exit(0);
-  }
-  a->nodetype = 'K';
-  a->number = d;
-  return (struct ast *)a;
+    struct numval *a = malloc(sizeof(struct numval));
+    if (!a)
+    {
+        yyerror("out of space");
+        exit(0);
+    }
+    a->nodetype = 'K';
+    a->type = type;
+    a->value = value;
+    ((struct ast *)a)->result_type = type;
+    return (struct ast *)a;
 }
 
-struct ast *
-newcmp(int cmptype, struct ast *l, struct ast *r)
+struct ast *newcmp(int cmptype, struct ast *l, struct ast *r)
 {
-  struct ast *a = malloc(sizeof(struct ast));
-  
-  if(!a) {
-    yyerror("out of space");
-    exit(0);
-  }
-  a->nodetype = '0' + cmptype;
-  a->l = l;
-  a->r = r;
-  return a;
+    struct ast *a = malloc(sizeof(struct ast));
+    if (!a)
+    {
+        yyerror("out of space");
+        exit(0);
+    }
+    a->nodetype = '0' + cmptype;
+    a->l = l;
+    a->r = r;
+    a->result_type = TYPE_INT; // comparisons always return int
+    return a;
 }
 
-struct ast *
-newfunc(int functype, struct ast *l)
+struct ast *newfunc(int functype, struct ast *l)
 {
-  struct fncall *a = malloc(sizeof(struct fncall));
-  
-  if(!a) {
-    yyerror("out of space");
-    exit(0);
-  }
-  a->nodetype = 'F';
-  a->l = l;
-  a->functype = functype;
-  return (struct ast *)a;
+    struct fncall *a = malloc(sizeof(struct fncall));
+    if (!a)
+    {
+        yyerror("out of space");
+        exit(0);
+    }
+    a->nodetype = 'F';
+    a->l = l;
+    a->functype = functype;
+    ((struct ast *)a)->result_type = TYPE_DOUBLE; // built-in functions return double
+    return (struct ast *)a;
 }
 
-struct ast *
-newcall(struct symbol *s, struct ast *l)
+struct ast *newcall(struct symbol *s, struct ast *l)
 {
-  struct ufncall *a = malloc(sizeof(struct ufncall));
-  
-  if(!a) {
-    yyerror("out of space");
-    exit(0);
-  }
-  a->nodetype = 'C';
-  a->l = l;
-  a->s = s;
-  return (struct ast *)a;
+    struct ufncall *a = malloc(sizeof(struct ufncall));
+    if (!a)
+    {
+        yyerror("out of space");
+        exit(0);
+    }
+    a->nodetype = 'C';
+    a->l = l;
+    a->s = s;
+    ((struct ast *)a)->result_type = s->type; // function return type
+    return (struct ast *)a;
 }
 
-struct ast *
-newref(struct symbol *s)
+struct ast *newref(struct symbol *s)
 {
-  struct symref *a = malloc(sizeof(struct symref));
-  
-  if(!a) {
-    yyerror("out of space");
-    exit(0);
-  }
-  a->nodetype = 'N';
-  a->s = s;
-  return (struct ast *)a;
+    struct symref *a = malloc(sizeof(struct symref));
+    if (!a)
+    {
+        yyerror("out of space");
+        exit(0);
+    }
+    a->nodetype = 'N';
+    a->s = s;
+    ((struct ast *)a)->result_type = s->type;
+    return (struct ast *)a;
 }
 
-struct ast *
-newasgn(struct symbol *s, struct ast *v)
+struct ast *newasgn(struct symbol *s, struct ast *v)
 {
-  struct symasgn *a = malloc(sizeof(struct symasgn));
-  
-  if(!a) {
-    yyerror("out of space");
-    exit(0);
-  }
-  a->nodetype = '=';
-  a->s = s;
-  a->v = v;
-  return (struct ast *)a;
+    struct symasgn *a = malloc(sizeof(struct symasgn));
+    if (!a)
+    {
+        yyerror("out of space");
+        exit(0);
+    }
+    a->nodetype = '=';
+    a->s = s;
+    a->v = v;
+
+    ((struct ast *)a)->result_type = s->type;
+    return (struct ast *)a;
 }
 
-struct ast *
-newflow(int nodetype, struct ast *cond, struct ast *tl, struct ast *el)
+struct ast *newflow(int nodetype, struct ast *cond, struct ast *tl, struct ast *el)
 {
-  struct flow *a = malloc(sizeof(struct flow));
-  
-  if(!a) {
-    yyerror("out of space");
-    exit(0);
-  }
-  a->nodetype = nodetype;
-  a->cond = cond;
-  a->tl = tl;
-  a->el = el;
-  return (struct ast *)a;
+    struct flow *a = malloc(sizeof(struct flow));
+    if (!a)
+    {
+        yyerror("out of space");
+        exit(0);
+    }
+    a->nodetype = nodetype;
+    a->cond = cond;
+    a->tl = tl;
+    a->el = el;
+    if (tl)
+    {
+        ((struct ast *)a)->result_type = tl->result_type;
+    }
+    else if (el)
+    {
+        ((struct ast *)a)->result_type = el->result_type;
+    }
+    else
+    {
+        ((struct ast *)a)->result_type = TYPE_INT;
+    }
+    return (struct ast *)a;
 }
 
-struct symlist *
-newsymlist(struct symbol *sym, struct symlist *next)
+void dodef(struct symbol *name, struct symlist *syms, struct ast *func)
 {
-  struct symlist *sl = malloc(sizeof(struct symlist));
-  
-  if(!sl) {
-    yyerror("out of space");
-    exit(0);
-  }
-  sl->sym = sym;
-  sl->next = next;
-  return sl;
+    if (name->syms)
+        symlistfree(name->syms);
+    if (name->func)
+        treefree(name->func);
+    name->syms = syms;
+    name->func = func;
 }
 
-void
-symlistfree(struct symlist *sl)
+struct value eval(struct ast *a)
 {
-  struct symlist *nsl;
+    struct value v1, v2, result;
 
-  while(sl) {
-    nsl = sl->next;
-    free(sl);
-    sl = nsl;
-  }
-}
+    if (!a)
+    {
+        yyerror("internal error, null eval");
+        result.type = TYPE_INT;
+        result.value.i_val = 0;
+        return result;
+    }
 
-/* define a function */
-void
-dodef(struct symbol *name, struct symlist *syms, struct ast *func)
-{
-  if(name->syms) symlistfree(name->syms);
-  if(name->func) treefree(name->func);
-  name->syms = syms;
-  name->func = func;
-}
-
-static double callbuiltin(struct fncall *);
-static double calluser(struct ufncall *);
-
-double
-eval(struct ast *a)
-{
-  double v;
-
-  if(!a) {
-    yyerror("internal error, null eval");
-    return 0.0;
-  }
-
-  switch(a->nodetype) {
+    switch (a->nodetype)
+    {
+    /* declaration */
+    case 'D':
+    {
+        struct symbol *s = (struct symbol *)a->l;
+        result.type = s->type;
+        switch (s->type)
+        {
+        case TYPE_INT:
+            result.value.i_val = 0;
+            break;
+        case TYPE_FLOAT:
+            result.value.f_val = 0.0f;
+            break;
+        case TYPE_DOUBLE:
+            result.value.d_val = 0.0;
+            break;
+        }
+        if (debug)
+        {
+            printf("Declared %s as ", s->name);
+            switch (s->type)
+            {
+            case TYPE_INT:
+                printf("INT\n");
+                break;
+            case TYPE_FLOAT:
+                printf("FLOAT\n");
+                break;
+            case TYPE_DOUBLE:
+                printf("DOUBLE\n");
+                break;
+            }
+        }
+        return result;
+    }
     /* constant */
-  case 'K': v = ((struct numval *)a)->number; break;
+    case 'K':
+    {
+        struct numval *n = (struct numval *)a;
+        result.type = n->type;
+        result.value = n->value;
+        return result;
+    }
 
     /* name reference */
-  case 'N': v = ((struct symref *)a)->s->value; break;
+    case 'N':
+    {
+        struct symref *s = (struct symref *)a;
+        result.type = s->s->type;
+        result.value = s->s->value;
+        return result;
+    }
 
     /* assignment */
-  case '=': v = ((struct symasgn *)a)->s->value =
-      eval(((struct symasgn *)a)->v); break;
+    case '=':
+    {
+        struct symasgn *sa = (struct symasgn *)a;
+        v1 = eval(sa->v);
+
+        // Convert assigned value to the variable's type
+        convert_value(&sa->s->value, sa->s->type, &v1.value, v1.type);
+
+        // Return the value after conversion, maintaining the variable's type
+        result.type = sa->s->type;
+        result.value = sa->s->value;
+
+        // For debug output
+        if (debug)
+        {
+            printf("Assignment to %s (type: ", sa->s->name);
+            switch (sa->s->type)
+            {
+            case TYPE_INT:
+                printf("INT");
+                break;
+            case TYPE_FLOAT:
+                printf("FLOAT");
+                break;
+            case TYPE_DOUBLE:
+                printf("DOUBLE");
+                break;
+            }
+            printf(")\n");
+        }
+
+        return result;
+    }
 
     /* expressions */
-  case '+': v = eval(a->l) + eval(a->r); break;
-  case '-': v = eval(a->l) - eval(a->r); break;
-  case '*': v = eval(a->l) * eval(a->r); break;
-  case '/': v = eval(a->l) / eval(a->r); break;
-  case '|': v = fabs(eval(a->l)); break;
-  case 'M': v = -eval(a->l); break;
+    case '+':
+    case '-':
+    case '*':
+    case '/':
+    {
+        v1 = eval(a->l);
+        v2 = eval(a->r);
+
+        result.type = promote_types(v1.type, v2.type);
+        union value_union temp1, temp2;
+
+        convert_value(&temp1, result.type, &v1.value, v1.type);
+        convert_value(&temp2, result.type, &v2.value, v2.type);
+
+        switch (result.type)
+        {
+        case TYPE_INT:
+            switch (a->nodetype)
+            {
+            case '+':
+                result.value.i_val = temp1.i_val + temp2.i_val;
+                break;
+            case '-':
+                result.value.i_val = temp1.i_val - temp2.i_val;
+                break;
+            case '*':
+                result.value.i_val = temp1.i_val * temp2.i_val;
+                break;
+            case '/':
+                if (temp2.i_val == 0)
+                {
+                    yyerror("division by zero");
+                    result.value.i_val = 0;
+                }
+                else
+                {
+                    result.value.i_val = temp1.i_val / temp2.i_val;
+                }
+                break;
+            }
+            break;
+
+        case TYPE_FLOAT:
+            switch (a->nodetype)
+            {
+            case '+':
+                result.value.f_val = temp1.f_val + temp2.f_val;
+                break;
+            case '-':
+                result.value.f_val = temp1.f_val - temp2.f_val;
+                break;
+            case '*':
+                result.value.f_val = temp1.f_val * temp2.f_val;
+                break;
+            case '/':
+                if (temp2.f_val == 0.0f)
+                {
+                    yyerror("division by zero");
+                    result.value.f_val = 0.0f;
+                }
+                else
+                {
+                    result.value.f_val = temp1.f_val / temp2.f_val;
+                }
+                break;
+            }
+            break;
+
+        case TYPE_DOUBLE:
+            switch (a->nodetype)
+            {
+            case '+':
+                result.value.d_val = temp1.d_val + temp2.d_val;
+                break;
+            case '-':
+                result.value.d_val = temp1.d_val - temp2.d_val;
+                break;
+            case '*':
+                result.value.d_val = temp1.d_val * temp2.d_val;
+                break;
+            case '/':
+                if (temp2.d_val == 0.0)
+                {
+                    yyerror("division by zero");
+                    result.value.d_val = 0.0;
+                }
+                else
+                {
+                    result.value.d_val = temp1.d_val / temp2.d_val;
+                }
+                break;
+            }
+            break;
+        }
+        return result;
+    }
+
+    /* unary operations */
+    case '|':
+    {
+        v1 = eval(a->l);
+        result.type = v1.type;
+
+        switch (v1.type)
+        {
+        case TYPE_INT:
+            result.value.i_val = abs(v1.value.i_val);
+            break;
+        case TYPE_FLOAT:
+            result.value.f_val = fabsf(v1.value.f_val);
+            break;
+        case TYPE_DOUBLE:
+            result.value.d_val = fabs(v1.value.d_val);
+            break;
+        }
+        return result;
+    }
+
+    case 'M':
+    { // unary minus
+        v1 = eval(a->l);
+        result.type = v1.type;
+
+        switch (v1.type)
+        {
+        case TYPE_INT:
+            result.value.i_val = -v1.value.i_val;
+            break;
+        case TYPE_FLOAT:
+            result.value.f_val = -v1.value.f_val;
+            break;
+        case TYPE_DOUBLE:
+            result.value.d_val = -v1.value.d_val;
+            break;
+        }
+        return result;
+    }
 
     /* comparisons */
-  case '1': v = (eval(a->l) > eval(a->r))? 1 : 0; break;
-  case '2': v = (eval(a->l) < eval(a->r))? 1 : 0; break;
-  case '3': v = (eval(a->l) != eval(a->r))? 1 : 0; break;
-  case '4': v = (eval(a->l) == eval(a->r))? 1 : 0; break;
-  case '5': v = (eval(a->l) >= eval(a->r))? 1 : 0; break;
-  case '6': v = (eval(a->l) <= eval(a->r))? 1 : 0; break;
+    case '1':
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    case '6':
+    {
+        v1 = eval(a->l);
+        v2 = eval(a->r);
 
-  /* control flow */
-  /* null if/else/do expressions allowed in the grammar, so check for them */
-  case 'I': 
-    if( eval( ((struct flow *)a)->cond) != 0) {
-      if( ((struct flow *)a)->tl) {
-	v = eval( ((struct flow *)a)->tl);
-      } else
-	v = 0.0;		/* a default value */
-    } else {
-      if( ((struct flow *)a)->el) {
-        v = eval(((struct flow *)a)->el);
-      } else
-	v = 0.0;		/* a default value */
+        enum value_type comp_type = promote_types(v1.type, v2.type);
+        union value_union temp1, temp2;
+        convert_value(&temp1, comp_type, &v1.value, v1.type);
+        convert_value(&temp2, comp_type, &v2.value, v2.type);
+
+        result.type = TYPE_INT; // comparisons always return int
+
+        switch (comp_type)
+        {
+        case TYPE_INT:
+        {
+            int cmp = temp1.i_val - temp2.i_val;
+            switch (a->nodetype)
+            {
+            case '1':
+                result.value.i_val = cmp > 0;
+                break; // >
+            case '2':
+                result.value.i_val = cmp < 0;
+                break; // <
+            case '3':
+                result.value.i_val = cmp != 0;
+                break; // <>
+            case '4':
+                result.value.i_val = cmp == 0;
+                break; // ==
+            case '5':
+                result.value.i_val = cmp >= 0;
+                break; // >=
+            case '6':
+                result.value.i_val = cmp <= 0;
+                break; // <=
+            }
+            break;
+        }
+        case TYPE_FLOAT:
+        {
+            float cmp = temp1.f_val - temp2.f_val;
+            switch (a->nodetype)
+            {
+            case '1':
+                result.value.i_val = cmp > 0;
+                break;
+            case '2':
+                result.value.i_val = cmp < 0;
+                break;
+            case '3':
+                result.value.i_val = cmp != 0;
+                break;
+            case '4':
+                result.value.i_val = cmp == 0;
+                break;
+            case '5':
+                result.value.i_val = cmp >= 0;
+                break;
+            case '6':
+                result.value.i_val = cmp <= 0;
+                break;
+            }
+            break;
+        }
+        case TYPE_DOUBLE:
+        {
+            double cmp = temp1.d_val - temp2.d_val;
+            switch (a->nodetype)
+            {
+            case '1':
+                result.value.i_val = cmp > 0;
+                break;
+            case '2':
+                result.value.i_val = cmp < 0;
+                break;
+            case '3':
+                result.value.i_val = cmp != 0;
+                break;
+            case '4':
+                result.value.i_val = cmp == 0;
+                break;
+            case '5':
+                result.value.i_val = cmp >= 0;
+                break;
+            case '6':
+                result.value.i_val = cmp <= 0;
+                break;
+            }
+            break;
+        }
+        }
+        return result;
     }
-    break;
 
-  case 'W':
-    v = 0.0;		/* a default value */
-    
-    if( ((struct flow *)a)->tl) {
-      while( eval(((struct flow *)a)->cond) != 0)
-	v = eval(((struct flow *)a)->tl);
+    /* control flow */
+    case 'I':
+    case 'W':
+    {
+        if (a->nodetype == 'I')
+        {
+            v1 = eval(((struct flow *)a)->cond);
+            if (v1.value.i_val != 0)
+            {
+                if (((struct flow *)a)->tl)
+                {
+                    result = eval(((struct flow *)a)->tl);
+                }
+                else
+                {
+                    result.type = TYPE_INT;
+                    result.value.i_val = 0;
+                }
+            }
+            else
+            {
+                if (((struct flow *)a)->el)
+                {
+                    result = eval(((struct flow *)a)->el);
+                }
+                else
+                {
+                    result.type = TYPE_INT;
+                    result.value.i_val = 0;
+                }
+            }
+        }
+        else
+        { // WHILE
+            result.type = TYPE_INT;
+            result.value.i_val = 0;
+            if (((struct flow *)a)->tl)
+            {
+                while ((v1 = eval(((struct flow *)a)->cond)).value.i_val)
+                {
+                    result = eval(((struct flow *)a)->tl);
+                }
+            }
+        }
+        return result;
     }
-    break;			/* last value is value */
-	              
-  case 'L': eval(a->l); v = eval(a->r); break;
 
-  case 'F': v = callbuiltin((struct fncall *)a); break;
+    /* function calls */
+    case 'L':
+    {
+        eval(a->l);
+        result = eval(a->r);
+        return result;
+    }
 
-  case 'C': v = calluser((struct ufncall *)a); break;
+    case 'F':
+    {
+        struct fncall *f = (struct fncall *)a;
+        v1 = eval(f->l);
 
-  default: printf("internal error: bad node %c\n", a->nodetype);
-  }
-  return v;
+        // Convert to double for built-in functions
+        union value_union temp;
+        convert_value(&temp, TYPE_DOUBLE, &v1.value, v1.type);
+
+        result.type = TYPE_DOUBLE;
+
+        switch (f->functype)
+        {
+        case B_sqrt:
+            if (temp.d_val < 0)
+            {
+                yyerror("sqrt of negative number");
+                result.value.d_val = 0;
+            }
+            else
+            {
+                result.value.d_val = sqrt(temp.d_val);
+            }
+            break;
+        case B_exp:
+            result.value.d_val = exp(temp.d_val);
+            break;
+        case B_log:
+            if (temp.d_val <= 0)
+            {
+                yyerror("log of non-positive number");
+                result.value.d_val = 0;
+            }
+            else
+            {
+                result.value.d_val = log(temp.d_val);
+            }
+            break;
+        case B_print:
+            switch (v1.type)
+            {
+            case TYPE_INT:
+                printf("= %d\n", v1.value.i_val);
+                break;
+            case TYPE_FLOAT:
+                printf("= %f\n", v1.value.f_val);
+                break;
+            case TYPE_DOUBLE:
+                printf("= %g\n", v1.value.d_val);
+                break;
+            }
+            result = v1;
+            break;
+        default:
+            yyerror("Unknown built-in function %d", f->functype);
+            result.value.d_val = 0;
+        }
+        return result;
+    }
+
+    case 'C':
+    {
+        struct ufncall *f = (struct ufncall *)a;
+        if (!f->s->func)
+        {
+            yyerror("call to undefined function %s", f->s->name);
+            result.type = TYPE_INT;
+            result.value.i_val = 0;
+            return result;
+        }
+
+        // Evaluate and store arguments
+        struct ast *args = f->l;
+        struct symlist *sl = f->s->syms;
+        struct value *oldval = NULL;
+        int nargs;
+
+        for (nargs = 0, sl = f->s->syms; sl; sl = sl->next)
+            nargs++;
+
+        if (nargs > 0)
+            oldval = malloc(nargs * sizeof(struct value));
+
+        for (int i = 0; sl && args; i++)
+        {
+            if (args->nodetype == 'L')
+            {
+                oldval[i].type = sl->sym->type;
+                oldval[i].value = sl->sym->value;
+                v1 = eval(args->l);
+                convert_value(&sl->sym->value, sl->sym->type, &v1.value, v1.type);
+                args = args->r;
+            }
+            else
+            {
+                oldval[i].type = sl->sym->type;
+                oldval[i].value = sl->sym->value;
+                v1 = eval(args);
+                convert_value(&sl->sym->value, sl->sym->type, &v1.value, v1.type);
+                args = NULL;
+            }
+            sl = sl->next;
+        }
+
+        result = eval(f->s->func);
+
+        // Restore old values
+        sl = f->s->syms;
+        for (int i = 0; i < nargs; i++)
+        {
+            sl->sym->type = oldval[i].type;
+            sl->sym->value = oldval[i].value;
+            sl = sl->next;
+        }
+
+        if (oldval)
+            free(oldval);
+
+        return result;
+    }
+
+    default:
+        printf("internal error: bad node %c\n", a->nodetype);
+        result.type = TYPE_INT;
+        result.value.i_val = 0;
+        return result;
+    }
 }
 
-static double
-callbuiltin(struct fncall *f)
+void symlistfree(struct symlist *sl)
 {
-  enum bifs functype = f->functype;
-  double v = eval(f->l);
+    struct symlist *nsl;
 
- switch(functype) {
- case B_sqrt:
-   return sqrt(v);
- case B_exp:
-   return exp(v);
- case B_log:
-   return log(v);
- case B_print:
-   printf("= %4.4g\n", v);
-   return v;
- default:
-   yyerror("Unknown built-in function %d", functype);
-   return 0.0;
- }
+    while (sl)
+    {
+        nsl = sl->next;
+        free(sl);
+        sl = nsl;
+    }
 }
 
-static double
-calluser(struct ufncall *f)
+void treefree(struct ast *a)
 {
-  struct symbol *fn = f->s;	/* function name */
-  struct symlist *sl;		/* dummy arguments */
-  struct ast *args = f->l;	/* actual arguments */
-  double *oldval, *newval;	/* saved arg values */
-  double v;
-  int nargs;
-  int i;
+    if (!a)
+        return;
 
-  if(!fn->func) {
-    yyerror("call to undefined function", fn->name);
-    return 0;
-  }
-
-  /* count the arguments */
-  sl = fn->syms;
-  for(nargs = 0; sl; sl = sl->next)
-    nargs++;
-
-  /* prepare to save them */
-  oldval = (double *)malloc(nargs * sizeof(double));
-  newval = (double *)malloc(nargs * sizeof(double));
-  if(!oldval || !newval) {
-    yyerror("Out of space in %s", fn->name); return 0.0;
-  }
-  
-  /* evaluate the arguments */
-  for(i = 0; i < nargs; i++) {
-    if(!args) {
-      yyerror("too few args in call to %s", fn->name);
-      free(oldval); free(newval);
-      return 0;
-    }
-
-    if(args->nodetype == 'L') {	/* if this is a list node */
-      newval[i] = eval(args->l);
-      args = args->r;
-    } else {			/* if it's the end of the list */
-      newval[i] = eval(args);
-      args = NULL;
-    }
-  }
-		     
-  /* save old values of dummies, assign new ones */
-  sl = fn->syms;
-  for(i = 0; i < nargs; i++) {
-    struct symbol *s = sl->sym;
-
-    oldval[i] = s->value;
-    s->value = newval[i];
-    sl = sl->next;
-  }
-
-  free(newval);
-
-  /* evaluate the function */
-  v = eval(fn->func);
-
-  /* put the dummies back */
-  sl = fn->syms;
-  for(i = 0; i < nargs; i++) {
-    struct symbol *s = sl->sym;
-
-    s->value = oldval[i];
-    sl = sl->next;
-  }
-
-  free(oldval);
-  return v;
-}
-
-
-void
-treefree(struct ast *a)
-{
-  switch(a->nodetype) {
-
+    switch (a->nodetype)
+    {
     /* two subtrees */
-  case '+':
-  case '-':
-  case '*':
-  case '/':
-  case '1':  case '2':  case '3':  case '4':  case '5':  case '6':
-  case 'L':
-    treefree(a->r);
+    case '+':
+    case '-':
+    case '*':
+    case '/':
+    case '1':
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    case '6':
+    case 'L':
+        treefree(a->r);
+        /* fall through */
 
     /* one subtree */
-  case '|':
-  case 'M': case 'C': case 'F':
-    treefree(a->l);
+    case '|':
+    case 'M':
+    case 'C':
+    case 'F':
+        treefree(a->l);
+        break;
 
     /* no subtree */
-  case 'K': case 'N':
-    break;
+    case 'D':
+    case 'K':
+    case 'N':
+        break;
 
-  case '=':
-    free( ((struct symasgn *)a)->v);
-    break;
+    case '=':
+        free(((struct symasgn *)a)->v);
+        break;
 
-  case 'I': case 'W':
-    free( ((struct flow *)a)->cond);
-    if( ((struct flow *)a)->tl) free( ((struct flow *)a)->tl);
-    if( ((struct flow *)a)->el) free( ((struct flow *)a)->el);
-    break;
+    case 'I':
+    case 'W':
+        free(((struct flow *)a)->cond);
+        if (((struct flow *)a)->tl)
+            free(((struct flow *)a)->tl);
+        if (((struct flow *)a)->el)
+            free(((struct flow *)a)->el);
+        break;
 
-  default: printf("internal error: free bad node %c\n", a->nodetype);
-  }	  
-  
-  free(a); /* always free the node itself */
+    default:
+        printf("internal error: free bad node %c\n", a->nodetype);
+    }
 
+    free(a); /* always free the node itself */
 }
 
-void
-yyerror(char *s, ...)
+void yyerror(char *s, ...)
 {
-  va_list ap;
-  va_start(ap, s);
-
-  fprintf(stderr, "%d: error: ", yylineno);
-  vfprintf(stderr, s, ap);
-  fprintf(stderr, "\n");
+    va_list ap;
+    va_start(ap, s);
+    fprintf(stderr, "%d: error: ", yylineno);
+    vfprintf(stderr, s, ap);
+    fprintf(stderr, "\n");
+    va_end(ap);
 }
 
-int
-main()
+/* debug: dump out an AST */
+void dumpast(struct ast *a, int level)
 {
-  printf("> "); 
-  return yyparse();
+    printf("%*s", 2 * level, "");
+    level++;
+
+    if (!a)
+    {
+        printf("NULL\n");
+        return;
+    }
+
+    switch (a->nodetype)
+    {
+    case 'D':
+    {
+        struct symbol *s = (struct symbol *)a->l;
+        printf("Declaration of %s as ", s->name);
+        switch (s->type)
+        {
+        case TYPE_INT:
+            printf("INT\n");
+            break;
+        case TYPE_FLOAT:
+            printf("FLOAT\n");
+            break;
+        case TYPE_DOUBLE:
+            printf("DOUBLE\n");
+            break;
+        }
+        break;
+    }
+
+    case 'K':
+    {
+        struct numval *n = (struct numval *)a;
+        switch (n->type)
+        {
+        case TYPE_INT:
+            printf("number(int) %d\n", n->value.i_val);
+            break;
+        case TYPE_FLOAT:
+            printf("number(float) %f\n", n->value.f_val);
+            break;
+        case TYPE_DOUBLE:
+            printf("number(double) %g\n", n->value.d_val);
+            break;
+        }
+        break;
+    }
+
+    case 'N':
+        printf("ref %s\n", ((struct symref *)a)->s->name);
+        break;
+
+    case '=':
+        printf("= %s\n", ((struct symasgn *)a)->s->name);
+        dumpast(((struct symasgn *)a)->v, level);
+        return;
+
+    case '+':
+    case '-':
+    case '*':
+    case '/':
+    case 'L':
+    case '1':
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    case '6':
+        printf("binop %c\n", a->nodetype);
+        dumpast(a->l, level);
+        dumpast(a->r, level);
+        return;
+
+    case '|':
+    case 'M':
+        printf("unop %c\n", a->nodetype);
+        dumpast(a->l, level);
+        return;
+
+    case 'I':
+    case 'W':
+        printf("flow %c\n", a->nodetype);
+        dumpast(((struct flow *)a)->cond, level);
+        if (((struct flow *)a)->tl)
+            dumpast(((struct flow *)a)->tl, level);
+        if (((struct flow *)a)->el)
+            dumpast(((struct flow *)a)->el, level);
+        return;
+
+    case 'F':
+        printf("builtin %d\n", ((struct fncall *)a)->functype);
+        dumpast(a->l, level);
+        return;
+
+    case 'C':
+        printf("call %s\n", ((struct ufncall *)a)->s->name);
+        dumpast(a->l, level);
+        return;
+
+    default:
+        printf("bad %c\n", a->nodetype);
+        return;
+    }
 }
 
-/* debugging: dump out an AST */
-int debug = 0;
-void
-dumpast(struct ast *a, int level)
+int main(void)
 {
-
-  printf("%*s", 2*level, "");	/* indent to this level */
-  level++;
-
-  if(!a) {
-    printf("NULL\n");
-    return;
-  }
-
-  switch(a->nodetype) {
-    /* constant */
-  case 'K': printf("number %4.4g\n", ((struct numval *)a)->number); break;
-
-    /* name reference */
-  case 'N': printf("ref %s\n", ((struct symref *)a)->s->name); break;
-
-    /* assignment */
-  case '=': printf("= %s\n", ((struct symref *)a)->s->name);
-    dumpast( ((struct symasgn *)a)->v, level); return;
-
-    /* expressions */
-  case '+': case '-': case '*': case '/': case 'L':
-  case '1': case '2': case '3':
-  case '4': case '5': case '6': 
-    printf("binop %c\n", a->nodetype);
-    dumpast(a->l, level);
-    dumpast(a->r, level);
-    return;
-
-  case '|': case 'M': 
-    printf("unop %c\n", a->nodetype);
-    dumpast(a->l, level);
-    return;
-
-  case 'I': case 'W':
-    printf("flow %c\n", a->nodetype);
-    dumpast( ((struct flow *)a)->cond, level);
-    if( ((struct flow *)a)->tl)
-      dumpast( ((struct flow *)a)->tl, level);
-    if( ((struct flow *)a)->el)
-      dumpast( ((struct flow *)a)->el, level);
-    return;
-	              
-  case 'F':
-    printf("builtin %d\n", ((struct fncall *)a)->functype);
-    dumpast(a->l, level);
-    return;
-
-  case 'C': printf("call %s\n", ((struct ufncall *)a)->s->name);
-    dumpast(a->l, level);
-    return;
-
-  default: printf("bad %c\n", a->nodetype);
-    return;
-  }
+    printf("> ");
+    return yyparse();
 }
