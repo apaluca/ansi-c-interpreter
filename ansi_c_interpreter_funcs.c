@@ -10,6 +10,8 @@
 /* Global variables */
 struct symbol symtab[NHASH]; /* symbol table */
 int debug = 1;               /* debug flag */
+struct ast *root = NULL;
+enum value_type current_type = TYPE_INT;
 
 /* Type system helper functions */
 void settype(struct symbol *sym, enum value_type type)

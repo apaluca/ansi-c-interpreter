@@ -166,6 +166,9 @@ void yyerror(const char *s);
 /* error handling regarding the internals of the parser */
 void error(char *s, ...);
 
+extern struct ast *root;
+extern enum value_type current_type;
+
 extern int debug;
 void dumpast(struct ast *a, int level);
 

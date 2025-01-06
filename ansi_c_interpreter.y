@@ -7,8 +7,6 @@ int yylex(void);
 int yyparse(void);
 extern char yytext[];
 extern int column;
-struct ast *root = NULL;
-enum value_type current_type = TYPE_INT;
 %}
 
 %union {
