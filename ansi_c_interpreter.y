@@ -1,6 +1,7 @@
 %{
 #  include <stdio.h>
 #  include <stdlib.h>
+#  include <unistd.h>
 #  include "ansi_c_interpreter.h"
 int yylex(void);
 int yyparse(void);
@@ -299,6 +300,9 @@ translation_unit
             }
             printf("> ");
             fflush(stdout);
+            if (isatty(0)) {
+                fflush(stdin);
+            }
         }
     | translation_unit external_declaration
         {
@@ -327,6 +331,9 @@ translation_unit
             }
             printf("> ");
             fflush(stdout);
+            if (isatty(0)) {
+                fflush(stdin);
+            }
         }
     ;
 
