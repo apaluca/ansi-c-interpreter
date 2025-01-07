@@ -50,3 +50,8 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# lex / yacc auto-generated sources
+*.tab.h
+*.tab.c
+*.lex.c

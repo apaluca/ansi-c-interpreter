@@ -340,6 +340,21 @@ struct ast *newast(int nodetype, struct ast *l, struct ast *r)
     return a;
 }
 
+struct ast *newcast(enum value_type type, struct ast *operand)
+{
+    struct typecast *a = malloc(sizeof(struct typecast));
+    if (!a)
+    {
+        error("out of space");
+        exit(0);
+    }
+    a->nodetype = 'T'; /* T for Type cast */
+    a->type = type;
+    a->operand = operand;
+    a->result_type = type; /* Result type is the target type */
+    return (struct ast *)a;
+}
+
 struct ast *newstring(char *s)
 {
     struct strval *sv = malloc(sizeof(struct strval));
@@ -700,6 +715,16 @@ struct value eval(struct ast *a)
 
     switch (a->nodetype)
     {
+    /* typecast */
+    case 'T':
+    {
+        struct typecast *t = (struct typecast *)a;
+        struct value operand = eval(t->operand);
+        result.type = t->type;
+        convert_value(&result.value, result.type, &operand.value, operand.type);
+        return result;
+    }
+
     /* return */
     case 'R':
     {
@@ -1444,6 +1469,10 @@ void treefree(struct ast *a)
         free(((struct strval *)a)->str);
         break;
 
+    case 'T':
+        treefree(((struct typecast *)a)->operand);
+        break;
+
     default:
         error("internal error: free bad node %c\n", a->nodetype);
     }
@@ -1475,6 +1504,25 @@ void dumpast(struct ast *a, int level)
 
     switch (a->nodetype)
     {
+    case 'T':
+    {
+        printf("cast to ");
+        switch (((struct typecast *)a)->type)
+        {
+        case TYPE_INT:
+            printf("int\n");
+            break;
+        case TYPE_FLOAT:
+            printf("float\n");
+            break;
+        case TYPE_DOUBLE:
+            printf("double\n");
+            break;
+        }
+        dumpast(((struct typecast *)a)->operand, level);
+        return;
+    }
+
     case 'D':
     {
         struct symbol *s = (struct symbol *)a->l;

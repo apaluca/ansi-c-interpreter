@@ -13,7 +13,8 @@ enum value_type
 };
 
 /* Format string for built-in functions scanf and printf */
-struct format_string {
+struct format_string
+{
     char *str;
 };
 
@@ -81,7 +82,6 @@ struct function_context
 extern struct function_context function_stack[];
 extern int function_depth;
 
-
 /* node types
  * + - * / |
  * 0-7 comparison ops, bit coded 04 equal, 02 less, 01 greater
@@ -114,8 +114,17 @@ struct ast
     struct ast *r;
 };
 
-struct strval {
-    int nodetype;          // type 'S' for string
+struct typecast
+{
+    int nodetype;         /* type T for typecast */
+    enum value_type type; /* target type */
+    struct ast *operand;  /* expression to cast */
+    enum value_type result_type;
+};
+
+struct strval
+{
+    int nodetype; // type 'S' for string
     char *str;
 };
 
@@ -189,6 +198,7 @@ void convert_value(void *dest, enum value_type dest_type,
 
 /* build an AST */
 struct ast *newast(int nodetype, struct ast *l, struct ast *r);
+struct ast *newcast(enum value_type type, struct ast *operand);
 struct ast *newstring(char *s);
 struct ast *newcmp(int cmptype, struct ast *l, struct ast *r);
 struct ast *newfunc(int functype, struct ast *l);

@@ -163,7 +163,10 @@ unary_expression
 cast_expression
     : unary_expression    { $$ = $1; }
     | '(' type_specifier ')' cast_expression
-        { $$ = $4; /* Handle type casting later */ }
+        { 
+            printf("DEBUG: Creating cast node to type %d\n", current_type);
+            $$ = newcast(current_type, $4);
+        }
     ;
 
 multiplicative_expression
