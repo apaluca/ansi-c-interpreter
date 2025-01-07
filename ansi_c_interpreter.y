@@ -37,11 +37,12 @@ extern int column;
 %type <a> declaration init_declarator statement compound_statement
 %type <a> expression_statement selection_statement iteration_statement
 %type <a> jump_statement translation_unit external_declaration
-%type <a> function_definition block_item block_item_list argument_expression_list
+%type <a> block_item block_item_list argument_expression_list
 %type <a> cast_expression
 
+%type <a> function_definition compound_statement_function
 %type <s> function_identifier
-%type <sl> parameter_list
+%type <sl> parameter_list parameter_list_opt
 %type <s> parameter_declaration
 
 %start translation_unit
@@ -276,8 +277,14 @@ iteration_statement
     ;
 
 jump_statement
-    : RETURN ';'            { $$ = NULL; }
-    | RETURN expression ';'  { $$ = $2; }
+    : RETURN ';'
+        {
+            $$ = newast('R', NULL, NULL);  /* Return with no value */
+        }
+    | RETURN expression ';'
+        {
+            $$ = newast('R', $2, NULL);    /* Return with value */
+        }
     ;
 
 translation_unit
@@ -352,11 +359,24 @@ external_declaration
     ;
 
 function_definition
-    : type_specifier IDENTIFIER '(' parameter_list ')' compound_statement
+    : type_specifier IDENTIFIER 
         {
-            dodef($2, $4, $6);
+            /* Set function type and create scope before parameters */
+            settype($2, current_type);
+            push_scope(); /* Create scope for parameters and body */
+        }
+      '(' parameter_list_opt ')' compound_statement_function
+        {
+            debug_print("function_definition", "Processing function definition");
+            dodef($2, $5, $7);
+            pop_scope();  /* Pop the function's scope */
             $$ = NULL;
         }
+    ;
+
+parameter_list_opt
+    : /* empty */     { $$ = NULL; }
+    | parameter_list  { $$ = $1; }
     ;
 
 parameter_list
@@ -368,7 +388,22 @@ parameter_list
 
 parameter_declaration
     : type_specifier IDENTIFIER
-        { $$ = $2; }
+        {
+            debug_print("parameter_declaration", "Processing parameter");
+            settype($2, current_type);
+            $$ = $2;
+        }
+    ;
+
+compound_statement_function
+    : '{' block_item_list '}'
+        {
+            $$ = $2;
+        }
+    | '{' '}'
+        {
+            $$ = NULL;
+        }
     ;
 
 %%

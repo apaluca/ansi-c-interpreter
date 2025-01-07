@@ -8,10 +8,12 @@
 #include "ansi_c_interpreter.h"
 
 /* Global variables */
-int debug = 1;               /* debug flag */
+int debug = 1; /* debug flag */
 struct ast *root = NULL;
 enum value_type current_type = NO_TYPE;
 struct scope *current_scope = NULL;
+static int in_return = 0;
+static struct value return_value;
 
 struct scope *push_scope(void)
 {
@@ -473,6 +475,31 @@ void dodef(struct symbol *name, struct symbol_list *syms, struct ast *func)
     name->func = func;
 }
 
+static struct value eval_function_body(struct ast *body)
+{
+    struct value result;
+    in_return = 0;
+
+    /* Evaluate function body */
+    if (body)
+    {
+        result = eval(body);
+        /* If we hit a return statement, use that value */
+        if (in_return)
+        {
+            result = return_value;
+        }
+    }
+    else
+    {
+        /* Default return value is 0 */
+        result.type = TYPE_INT;
+        result.value.i_val = 0;
+    }
+
+    return result;
+}
+
 struct value eval(struct ast *a)
 {
     struct value v1, v2, result;
@@ -487,6 +514,22 @@ struct value eval(struct ast *a)
 
     switch (a->nodetype)
     {
+    /* return */
+    case 'R':
+    {
+        if (a->l)
+        {
+            return_value = eval(a->l);
+        }
+        else
+        {
+            return_value.type = TYPE_INT;
+            return_value.value.i_val = 0;
+        }
+        in_return = 1;
+        return return_value;
+    }
+
     /* declaration */
     case 'D':
     {
@@ -951,6 +994,8 @@ struct value eval(struct ast *a)
     case 'C':
     {
         struct ufncall *f = (struct ufncall *)a;
+        struct scope *save_scope = current_scope;
+
         if (!f->s->func)
         {
             error("call to undefined function %s", f->s->name);
@@ -959,32 +1004,25 @@ struct value eval(struct ast *a)
             return result;
         }
 
-        // Evaluate and store arguments
+        /* Create new scope for function */
+        push_scope();
+
+        /* Evaluate and store arguments */
         struct ast *args = f->l;
         struct symbol_list *sl = f->s->syms;
-        struct value *oldval = NULL;
-        int nargs;
 
-        for (nargs = 0, sl = f->s->syms; sl; sl = sl->next)
-            nargs++;
-
-        if (nargs > 0)
-            oldval = malloc(nargs * sizeof(struct value));
-
-        for (int i = 0; sl && args; i++)
+        while (sl && args)
         {
             if (args->nodetype == 'L')
             {
-                oldval[i].type = sl->sym->type;
-                oldval[i].value = sl->sym->value;
+                /* Multiple arguments */
                 v1 = eval(args->l);
                 convert_value(&sl->sym->value, sl->sym->type, &v1.value, v1.type);
                 args = args->r;
             }
             else
             {
-                oldval[i].type = sl->sym->type;
-                oldval[i].value = sl->sym->value;
+                /* Single argument */
                 v1 = eval(args);
                 convert_value(&sl->sym->value, sl->sym->type, &v1.value, v1.type);
                 args = NULL;
@@ -992,21 +1030,25 @@ struct value eval(struct ast *a)
             sl = sl->next;
         }
 
-        result = eval(f->s->func);
-
-        // Restore old values
-        sl = f->s->syms;
-        for (int i = 0; i < nargs; i++)
+        /* Check argument count */
+        if ((sl && !args) || (!sl && args))
         {
-            sl->sym->type = oldval[i].type;
-            sl->sym->value = oldval[i].value;
-            sl = sl->next;
+            error("wrong number of arguments in call to %s", f->s->name);
         }
 
-        if (oldval)
-            free(oldval);
+        /* Evaluate function body */
+        result = eval_function_body(f->s->func);
 
-        return result;
+        /* Restore original scope */
+        pop_scope();
+        current_scope = save_scope;
+
+        /* Convert result to function's declared return type if needed */
+        struct value final_result;
+        final_result.type = f->s->type;
+        convert_value(&final_result.value, final_result.type, &result.value, result.type);
+
+        return final_result;
     }
 
     default:

@@ -77,6 +77,7 @@ extern struct scope *current_scope;
  * S list of symbols
  * F built in function call
  * C user function call
+ * R return statement
  */
 
 enum bifs
