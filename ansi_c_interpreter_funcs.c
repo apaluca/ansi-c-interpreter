@@ -340,6 +340,19 @@ struct ast *newast(int nodetype, struct ast *l, struct ast *r)
     return a;
 }
 
+struct ast *newstring(char *s)
+{
+    struct strval *sv = malloc(sizeof(struct strval));
+    if (!sv)
+    {
+        error("out of space");
+        exit(0);
+    }
+    sv->nodetype = 'S';
+    sv->str = s; // Takes ownership of the string
+    return (struct ast *)sv;
+}
+
 struct ast *newdecl(struct symbol *s)
 {
     struct ast *a = malloc(sizeof(struct ast));
@@ -520,6 +533,54 @@ void dodef(struct symbol *name, struct symbol_list *syms, struct ast *func)
     name->func = func;
 }
 
+char *process_string_literal(char *str)
+{
+    char *processed = malloc(strlen(str) + 1);
+    char *out = processed;
+
+    // Skip opening quote
+    str++;
+
+    while (*str && str[0] != '"')
+    {
+        if (str[0] == '\\')
+        {
+            switch (str[1])
+            {
+            case 'n':
+                *out++ = '\n';
+                str += 2;
+                break;
+            case 't':
+                *out++ = '\t';
+                str += 2;
+                break;
+            case 'r':
+                *out++ = '\r';
+                str += 2;
+                break;
+            case '\\':
+                *out++ = '\\';
+                str += 2;
+                break;
+            case '"':
+                *out++ = '"';
+                str += 2;
+                break;
+            default:
+                *out++ = *str++;
+                break;
+            }
+        }
+        else
+        {
+            *out++ = *str++;
+        }
+    }
+    *out = '\0';
+    return processed;
+}
+
 /* Push new function context */
 void push_function(struct symbol *func)
 {
@@ -529,7 +590,6 @@ void push_function(struct symbol *func)
         return;
     }
     function_stack[function_depth].function = func;
-    function_stack[function_depth].has_return = 0;
     function_depth++;
 }
 
@@ -614,10 +674,6 @@ struct value eval_function_body(struct ast *body, struct symbol *func)
 
         /* Check if we got a return value */
         struct function_context *ctx = current_function();
-        if (ctx && ctx->has_return)
-        {
-            result = ctx->return_value;
-        }
     }
     else
     {
@@ -1075,60 +1131,180 @@ struct value eval(struct ast *a)
     case 'F':
     {
         struct fncall *f = (struct fncall *)a;
-        v1 = eval(f->l);
+        if (!f->l)
+        {
+            error("Missing arguments for built-in function");
+            result.type = TYPE_INT;
+            result.value.i_val = 0;
+            return result;
+        }
 
-        // Convert to double for built-in functions
-        union value_union temp;
-        convert_value(&temp, TYPE_DOUBLE, &v1.value, v1.type);
+        // Get format string
+        char *format = NULL;
+        struct ast *args = NULL;
 
-        result.type = TYPE_DOUBLE;
+        if (f->l->nodetype == 'S')
+        {
+            format = ((struct strval *)f->l)->str;
+        }
+        else if (f->l->nodetype == 'L' && f->l->l->nodetype == 'S')
+        {
+            format = ((struct strval *)f->l->l)->str;
+            args = f->l->r;
+        }
+        else
+        {
+            error("Invalid arguments to built-in function");
+            result.type = TYPE_INT;
+            result.value.i_val = 0;
+            return result;
+        }
 
         switch (f->functype)
         {
-        case B_sqrt:
-            if (temp.d_val < 0)
+        case B_printf:
+        {
+            int chars_written = 0;
+            struct ast *current_arg = args;
+
+            for (const char *p = format; *p; p++)
             {
-                error("sqrt of negative number");
-                result.value.d_val = 0;
+                if (*p == '%')
+                {
+                    p++;
+                    if (!current_arg)
+                    {
+                        error("Too few arguments for format string");
+                        break;
+                    }
+
+                    struct value arg_val = eval(current_arg);
+                    switch (*p)
+                    {
+                    case 'd':
+                        if (arg_val.type != TYPE_INT)
+                        {
+                            error("format specifier %%d requires int argument");
+                        }
+                        else
+                        {
+                            chars_written += printf("%d", arg_val.value.i_val);
+                        }
+                        break;
+                    case 'f':
+                        if (arg_val.type == TYPE_FLOAT)
+                        {
+                            chars_written += printf("%f", arg_val.value.f_val);
+                        }
+                        else if (arg_val.type == TYPE_DOUBLE)
+                        {
+                            chars_written += printf("%f", arg_val.value.d_val);
+                        }
+                        else
+                        {
+                            error("format specifier %%f requires float or double argument");
+                        }
+                        break;
+                    default:
+                        error("unsupported format specifier %%%c", *p);
+                        break;
+                    }
+
+                    if (current_arg->nodetype == 'L')
+                    {
+                        current_arg = current_arg->r;
+                    }
+                }
+                else
+                {
+                    putchar(*p);
+                    chars_written++;
+                }
             }
-            else
-            {
-                result.value.d_val = sqrt(temp.d_val);
-            }
+
+            result.type = TYPE_INT;
+            result.value.i_val = chars_written;
             break;
-        case B_exp:
-            result.value.d_val = exp(temp.d_val);
-            break;
-        case B_log:
-            if (temp.d_val <= 0)
-            {
-                error("log of non-positive number");
-                result.value.d_val = 0;
-            }
-            else
-            {
-                result.value.d_val = log(temp.d_val);
-            }
-            break;
-        case B_print:
-            switch (v1.type)
-            {
-            case TYPE_INT:
-                printf("= %d\n", v1.value.i_val);
-                break;
-            case TYPE_FLOAT:
-                printf("= %f\n", v1.value.f_val);
-                break;
-            case TYPE_DOUBLE:
-                printf("= %g\n", v1.value.d_val);
-                break;
-            }
-            result = v1;
-            break;
-        default:
-            error("Unknown built-in function %d", f->functype);
-            result.value.d_val = 0;
         }
+
+        case B_scanf:
+        {
+            // Check format string
+            for (const char *p = format; *p; p++)
+            {
+                if (*p == '%')
+                {
+                    p++;
+                    if (*p != 'd' && *p != 'f')
+                    {
+                        error("unsupported format specifier %%%c for scanf", *p);
+                        result.type = TYPE_INT;
+                        result.value.i_val = 0;
+                        return result;
+                    }
+                }
+            }
+
+            // Get the variable reference
+            if (!args || args->nodetype != 'N')
+            {
+                error("scanf requires a variable reference");
+                result.type = TYPE_INT;
+                result.value.i_val = 0;
+                return result;
+            }
+
+            struct symref *ref = (struct symref *)args;
+            int items_read = 0;
+
+            // Handle different format specifiers
+            switch (format[1])
+            {
+            case 'd':
+                if (ref->s->type != TYPE_INT)
+                {
+                    error("format %%d requires int variable");
+                }
+                else
+                {
+                    items_read = scanf("%d", &ref->s->value.i_val);
+                    printf("DEBUG: scanf read integer: %d\n", ref->s->value.i_val);
+                }
+                break;
+
+            case 'f':
+                if (ref->s->type == TYPE_FLOAT)
+                {
+                    items_read = scanf("%f", &ref->s->value.f_val);
+                    printf("DEBUG: scanf read float: %f\n", ref->s->value.f_val);
+                }
+                else if (ref->s->type == TYPE_DOUBLE)
+                {
+                    items_read = scanf("%lf", &ref->s->value.d_val);
+                    printf("DEBUG: scanf read double: %g\n", ref->s->value.d_val);
+                }
+                else
+                {
+                    error("format %%f requires float or double variable");
+                }
+                break;
+
+            default:
+                error("unsupported format specifier");
+                break;
+            }
+
+            // Clear any remaining characters in the input buffer
+            int c;
+            while ((c = getchar()) != '\n' && c != EOF)
+                ;
+
+            result.type = TYPE_INT;
+            result.value.i_val = items_read;
+            return result;
+        }
+        }
+
         return result;
     }
 
@@ -1262,6 +1438,10 @@ void treefree(struct ast *a)
             free(((struct flow *)a)->tl);
         if (((struct flow *)a)->el)
             free(((struct flow *)a)->el);
+        break;
+
+    case 'S':
+        free(((struct strval *)a)->str);
         break;
 
     default:

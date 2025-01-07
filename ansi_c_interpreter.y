@@ -16,12 +16,14 @@ extern int column;
     struct symbol *s;
     struct symbol_list *sl;
     int fn;
+    struct format_string *format_str;
 }
 
 /* declare tokens */
 %token <v> CONSTANT
 %token <s> IDENTIFIER
-%token <s> STRING_LITERAL
+%token <format_str> STRING_LITERAL
+%token <fn> BUILTIN
 %token LE_OP GE_OP EQ_OP NE_OP
 
 %token INT FLOAT DOUBLE VOID
@@ -93,26 +95,55 @@ argument_expression_list
     ;
 
 postfix_expression
-    : primary_expression    { $$ = $1; }
-    | IDENTIFIER '(' ')'   
-        { 
+    : primary_expression { $$ = $1; }
+    | IDENTIFIER '(' ')'
+        {
             printf("DEBUG: Creating function call node for %s\n", $1->name);
             struct symbol *func = lookup_function($1->name);
             if (!func) {
                 error("undefined function %s", $1->name);
                 func = $1;
             }
-            $$ = newcall(func, NULL); 
+            $$ = newcall(func, NULL);
         }
     | IDENTIFIER '(' argument_expression_list ')'
-        { 
+        {
             printf("DEBUG: Creating function call node for %s with arguments\n", $1->name);
             struct symbol *func = lookup_function($1->name);
             if (!func) {
                 error("undefined function %s", $1->name);
                 func = $1;
             }
-            $$ = newcall(func, $3); 
+            $$ = newcall(func, $3);
+        }
+    | BUILTIN '(' STRING_LITERAL ',' argument_expression_list ')'
+        {
+            if ($1 == B_scanf) {
+                // For scanf, ensure the argument is a reference to a variable
+                if ($5->nodetype != 'N') {
+                    error("scanf requires a variable reference");
+                    $$ = NULL;
+                } else {
+                    struct ast *args = newast('L', newstring($3->str), $5);
+                    $$ = newfunc($1, args);
+                }
+            } else {
+                // Handle printf as before
+                struct ast *args = newast('L', newstring($3->str), $5);
+                $$ = newfunc($1, args);
+            }
+            free($3);
+        }
+    | BUILTIN '(' STRING_LITERAL ')'
+        {
+            // Only printf can be used with just a format string
+            if ($1 == B_scanf) {
+                error("scanf requires a variable argument");
+                $$ = NULL;
+            } else {
+                $$ = newfunc($1, newstring($3->str));
+            }
+            free($3);
         }
     ;
 

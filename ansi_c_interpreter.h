@@ -12,6 +12,11 @@ enum value_type
     TYPE_DOUBLE
 };
 
+/* Format string for built-in functions scanf and printf */
+struct format_string {
+    char *str;
+};
+
 /* Value union to store different types */
 union value_union
 {
@@ -69,7 +74,6 @@ struct function_context
 {
     struct symbol *function; /* Current function being executed */
     struct value return_value;
-    int has_return;
 };
 
 /* Stack of function contexts to handle nested calls */
@@ -96,10 +100,8 @@ extern int function_depth;
 
 enum bifs
 { /* built-in functions */
-  B_sqrt = 1,
-  B_exp,
-  B_log,
-  B_print
+  B_printf,
+  B_scanf
 };
 
 /* nodes in the Abstract Syntax Tree */
@@ -110,6 +112,11 @@ struct ast
     enum value_type result_type; /* type of the expression result */
     struct ast *l;
     struct ast *r;
+};
+
+struct strval {
+    int nodetype;          // type 'S' for string
+    char *str;
 };
 
 struct fncall
@@ -160,12 +167,12 @@ struct symasgn
 };
 
 /* Function management functions */
+char *process_string_literal(char *str);
 void push_function(struct symbol *func);
 struct function_context *pop_function(void);
 struct function_context *current_function(void);
 struct value eval_function_body(struct ast *body, struct symbol *func);
 struct symbol *lookup_function(char *name);
-
 
 /* Scope management functions */
 struct scope *push_scope(void);
@@ -182,6 +189,7 @@ void convert_value(void *dest, enum value_type dest_type,
 
 /* build an AST */
 struct ast *newast(int nodetype, struct ast *l, struct ast *r);
+struct ast *newstring(char *s);
 struct ast *newcmp(int cmptype, struct ast *l, struct ast *r);
 struct ast *newfunc(int functype, struct ast *l);
 struct ast *newcall(struct symbol *s, struct ast *l);

@@ -27,6 +27,8 @@ IS          ((u|U)|(u|U)?(l|L|ll|LL)|(l|L|ll|LL)(u|U))
 "return"		{ count(); return(RETURN); }
 "void"			{ count(); return(VOID); }
 "while"			{ count(); return(WHILE); }
+"printf"        { count(); yylval.fn = B_printf; return BUILTIN; }
+"scanf"         { count(); yylval.fn = B_scanf; return BUILTIN; }
 
 {L}({L}|{D})*		{ 
     count(); 
@@ -66,7 +68,14 @@ IS          ((u|U)|(u|U)?(l|L|ll|LL)|(l|L|ll|LL)(u|U))
     return(CONSTANT);
 }
 
-L?\"(\\.|[^\\"\n])*\"	{ count(); return(STRING_LITERAL); }
+L?\"(\\.|[^\\"\n])*\"	{ 
+    count();
+    char *processed = process_string_literal(yytext);
+    struct format_string *fs = malloc(sizeof(struct format_string));
+    fs->str = processed;
+    yylval.format_str = fs;
+    return STRING_LITERAL; 
+}
 
 "<="			{ count(); return(LE_OP); }
 ">="			{ count(); return(GE_OP); }
