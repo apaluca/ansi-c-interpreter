@@ -13,7 +13,7 @@ extern int column;
     struct ast *a;
     struct value v;
     struct symbol *s;
-    struct symlist *sl;
+    struct symbol_list *sl;
     int fn;
 }
 
@@ -27,6 +27,10 @@ extern int column;
 
 %token IF ELSE WHILE RETURN
 
+%nonassoc IFX
+%nonassoc ELSE
+%nonassoc UMINUS
+
 %type <a> primary_expression postfix_expression unary_expression
 %type <a> multiplicative_expression additive_expression relational_expression
 %type <a> equality_expression assignment_expression expression
@@ -39,8 +43,6 @@ extern int column;
 %type <s> function_identifier
 %type <sl> parameter_list
 %type <s> parameter_declaration
-
-%nonassoc UMINUS
 
 %start translation_unit
 %%
@@ -229,12 +231,20 @@ statement
     | expression_statement   { $$ = $1; }
     | selection_statement    { $$ = $1; }
     | iteration_statement    { $$ = $1; }
-    | jump_statement        { $$ = $1; }
+    | jump_statement         { $$ = $1; }
     ;
 
 compound_statement
-    : '{' '}'               { $$ = NULL; }
-    | '{' block_item_list '}'  { $$ = $2; }
+    : '{' {push_scope();} '}'
+        { 
+            pop_scope();
+            $$ = NULL; 
+        }
+    | '{' {push_scope();} block_item_list '}'
+        { 
+            pop_scope();
+            $$ = $3; 
+        }
     ;
 
 block_item_list
@@ -245,16 +255,16 @@ block_item_list
 
 block_item
     : declaration     { $$ = $1; }
-    | statement      { $$ = $1; }
+    | statement       { $$ = $1; }
     ;
 
 expression_statement
-    : ';'           { $$ = NULL; }
-    | expression ';'  { $$ = $1; }
+    : ';'             { current_type = NO_TYPE; $$ = NULL; }
+    | expression ';'  { current_type = NO_TYPE; $$ = $1; }
     ;
 
 selection_statement
-    : IF '(' expression ')' statement
+    : IF '(' expression ')' statement %prec IFX
         { $$ = newflow('I', $3, $5, NULL); }
     | IF '(' expression ')' statement ELSE statement
         { $$ = newflow('I', $3, $5, $7); }

@@ -34,24 +34,35 @@ struct symbol
     enum value_type type;
     union value_union value;
     struct ast *func;     /* stmt for the function */
-    struct symlist *syms; /* list of dummy args */
+    struct symbol_list *syms; /* list of dummy args */
 };
-
-/* simple symtab of fixed size */
-#define NHASH 9997
-extern struct symbol symtab[];
 
 struct symbol *lookup(char *);
 
 /* list of symbols, for an argument list */
-struct symlist
+struct symbol_list
 {
     struct symbol *sym;
-    struct symlist *next;
+    struct symbol_list *next;
 };
 
-struct symlist *newsymlist(struct symbol *sym, struct symlist *next);
-void symlistfree(struct symlist *sl);
+struct symbol_list *newsymlist(struct symbol *sym, struct symbol_list *next);
+void symlistfree(struct symbol_list *sl);
+
+/* Scope management */
+struct symbol_table
+{
+    struct symbol *sym;        // Symbol entry
+    struct symbol_table *next; // Next symbol in this scope
+};
+
+struct scope
+{
+    struct symbol_table *symbols; // Symbols in current scope
+    struct scope *parent;         // Parent scope
+};
+
+extern struct scope *current_scope;
 
 /* node types
  * + - * / |
@@ -133,6 +144,12 @@ struct symasgn
     enum value_type result_type;
 };
 
+/* Scope management functions */
+struct scope *push_scope(void);
+void pop_scope(void);
+struct symbol *scope_lookup(char *name);      // Look up symbol in current scope only
+struct symbol *lookup_all_scopes(char *name); // Look up symbol in all accessible scopes
+
 /* Type system functions */
 struct ast *newdecl(struct symbol *s);
 void settype(struct symbol *sym, enum value_type type);
@@ -151,7 +168,7 @@ struct ast *newnum(enum value_type type, union value_union value);
 struct ast *newflow(int nodetype, struct ast *cond, struct ast *tl, struct ast *tr);
 
 /* define a function */
-void dodef(struct symbol *name, struct symlist *syms, struct ast *stmts);
+void dodef(struct symbol *name, struct symbol_list *syms, struct ast *stmts);
 
 /* evaluate an AST */
 struct value eval(struct ast *);
@@ -167,6 +184,7 @@ void yyerror(const char *s);
 void error(char *s, ...);
 
 extern struct ast *root;
+#define NO_TYPE -1
 extern enum value_type current_type;
 
 extern int debug;

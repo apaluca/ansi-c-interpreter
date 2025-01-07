@@ -8,10 +8,88 @@
 #include "ansi_c_interpreter.h"
 
 /* Global variables */
-struct symbol symtab[NHASH]; /* symbol table */
 int debug = 1;               /* debug flag */
 struct ast *root = NULL;
-enum value_type current_type = TYPE_INT;
+enum value_type current_type = NO_TYPE;
+struct scope *current_scope = NULL;
+
+struct scope *push_scope(void)
+{
+    struct scope *new_scope = malloc(sizeof(struct scope));
+    if (!new_scope)
+    {
+        error("out of space");
+        exit(0);
+    }
+    new_scope->symbols = NULL;
+    new_scope->parent = current_scope;
+    current_scope = new_scope;
+    return new_scope;
+}
+
+void pop_scope(void)
+{
+    if (!current_scope)
+        return;
+
+    // Free all symbols in current scope
+    struct symbol_table *st = current_scope->symbols;
+    while (st)
+    {
+        struct symbol_table *next = st->next;
+        // Don't free the symbol itself as it might be referenced elsewhere
+        free(st);
+        st = next;
+    }
+
+    struct scope *old = current_scope;
+    current_scope = current_scope->parent;
+    free(old);
+}
+
+struct symbol *scope_lookup(char *name)
+{
+    if (!current_scope)
+    {
+        return NULL;
+    }
+
+    struct symbol_table *st = current_scope->symbols;
+    while (st)
+    {
+        if (strcmp(st->sym->name, name) == 0)
+        {
+            printf("DEBUG: Found %s in current scope\n", name);
+            return st->sym;
+        }
+        st = st->next;
+    }
+
+    printf("DEBUG: %s not found in current scope\n", name);
+    return NULL;
+}
+
+struct symbol *lookup_all_scopes(char *name)
+{
+    struct scope *s = current_scope;
+    printf("DEBUG: Searching all scopes for: %s\n", name);
+
+    while (s && s->parent)
+    { // Only search parent scopes
+        s = s->parent;
+        struct symbol_table *st = s->symbols;
+        while (st)
+        {
+            if (strcmp(st->sym->name, name) == 0)
+            {
+                printf("DEBUG: Found %s in outer scope\n", name);
+                return st->sym;
+            }
+            st = st->next;
+        }
+    }
+    return NULL;
+}
 
 /* Type system helper functions */
 void settype(struct symbol *sym, enum value_type type)
@@ -111,60 +189,87 @@ void convert_value(void *dest, enum value_type dest_type, void *src, enum value_
     }
 }
 
-/* symbol table */
-static unsigned symhash(char *sym)
-{
-    unsigned int hash = 0;
-    unsigned c;
-    while ((c = *sym++))
-        hash = hash * 9 ^ c;
-    return hash;
-}
-
 struct symbol *lookup(char *sym)
 {
     printf("DEBUG: Looking up symbol: %s\n", sym);
-    unsigned int hash = symhash(sym);
-    printf("DEBUG: Symbol hash: %u\n", hash);
 
-    struct symbol *sp = &symtab[hash % NHASH];
-    int scount = NHASH;
-
-    while (--scount >= 0)
+    // Always try to find in current scope first
+    struct symbol *current = scope_lookup(sym);
+    if (current)
     {
-        if (sp->name && !strcmp(sp->name, sym))
-        {
-            printf("DEBUG: Found existing symbol: %s\n", sp->name);
-            return sp;
-        }
-
-        if (!sp->name)
-        {
-            printf("DEBUG: Creating new symbol: %s\n", sym);
-            sp->name = strdup(sym);
-            if (!sp->name)
-            {
-                printf("ERROR: Memory allocation failed for symbol name\n");
-                abort();
-            }
-            sp->type = TYPE_DOUBLE; // Default type until declared
-            sp->value.d_val = 0;
-            sp->func = NULL;
-            sp->syms = NULL;
-            return sp;
-        }
-
-        if (++sp >= symtab + NHASH)
-            sp = symtab;
+        printf("DEBUG: Found symbol %s in current scope\n", sym);
+        return current;
     }
-    printf("ERROR: Symbol table overflow\n");
-    error("symbol table overflow\n");
-    abort();
+
+    // For variable references (not declarations), search outer scopes
+    if (current_type == NO_TYPE)
+    {
+        struct symbol *found = lookup_all_scopes(sym);
+        if (found)
+        {
+            printf("DEBUG: Found symbol %s in outer scope\n", sym);
+            return found;
+        }
+        // Only error if we're not in init_declarator
+        printf("DEBUG: Symbol %s not found in any scope\n", sym);
+        error("reference to undefined variable %s\n", sym);
+        return NULL;
+    }
+
+    // For declarations, create new symbol only if we're directly declaring it
+    printf("DEBUG: Creating new symbol %s in current scope\n", sym);
+    struct symbol *sp = malloc(sizeof(struct symbol));
+    if (!sp)
+    {
+        error("out of memory");
+        abort();
+    }
+
+    sp->name = strdup(sym);
+    if (!sp->name)
+    {
+        free(sp);
+        error("out of memory");
+        abort();
+    }
+
+    sp->type = current_type;
+    sp->func = NULL;
+    sp->syms = NULL;
+
+    // Initialize value based on type
+    switch (current_type)
+    {
+    case TYPE_INT:
+        sp->value.i_val = 0;
+        break;
+    case TYPE_FLOAT:
+        sp->value.f_val = 0.0f;
+        break;
+    case TYPE_DOUBLE:
+        sp->value.d_val = 0.0;
+        break;
+    }
+
+    // Add to current scope
+    struct symbol_table *st = malloc(sizeof(struct symbol_table));
+    if (!st)
+    {
+        free(sp->name);
+        free(sp);
+        error("out of space");
+        exit(0);
+    }
+    st->sym = sp;
+    st->next = current_scope->symbols;
+    current_scope->symbols = st;
+
+    return sp;
 }
 
-struct symlist *newsymlist(struct symbol *sym, struct symlist *next)
+struct symbol_list *newsymlist(struct symbol *sym, struct symbol_list *next)
 {
-    struct symlist *sl = malloc(sizeof(struct symlist));
+    struct symbol_list *sl = malloc(sizeof(struct symbol_list));
     if (!sl)
     {
         error("out of space");
@@ -291,8 +396,27 @@ struct ast *newref(struct symbol *s)
         exit(0);
     }
     a->nodetype = 'N';
-    a->s = s;
-    ((struct ast *)a)->result_type = s->type;
+
+    // Temporarily set current_type to NO_TYPE to force a lookup
+    enum value_type saved_type = current_type;
+    current_type = NO_TYPE;
+
+    // Look up the symbol again to ensure we find it in any scope
+    struct symbol *found = lookup_all_scopes(s->name);
+
+    // Restore the original current_type
+    current_type = saved_type;
+
+    if (found)
+    {
+        a->s = found;
+    }
+    else
+    {
+        a->s = s;
+    }
+
+    ((struct ast *)a)->result_type = a->s->type;
     return (struct ast *)a;
 }
 
@@ -339,7 +463,7 @@ struct ast *newflow(int nodetype, struct ast *cond, struct ast *tl, struct ast *
     return (struct ast *)a;
 }
 
-void dodef(struct symbol *name, struct symlist *syms, struct ast *func)
+void dodef(struct symbol *name, struct symbol_list *syms, struct ast *func)
 {
     if (name->syms)
         symlistfree(name->syms);
@@ -837,7 +961,7 @@ struct value eval(struct ast *a)
 
         // Evaluate and store arguments
         struct ast *args = f->l;
-        struct symlist *sl = f->s->syms;
+        struct symbol_list *sl = f->s->syms;
         struct value *oldval = NULL;
         int nargs;
 
@@ -893,9 +1017,9 @@ struct value eval(struct ast *a)
     }
 }
 
-void symlistfree(struct symlist *sl)
+void symlistfree(struct symbol_list *sl)
 {
-    struct symlist *nsl;
+    struct symbol_list *nsl;
 
     while (sl)
     {
@@ -1085,8 +1209,15 @@ void debug_print(const char *rule, const char *msg)
     fflush(stdout);
 }
 
+static void init_scope_system(void)
+{
+    // Create global scope
+    current_scope = push_scope();
+}
+
 int main(void)
 {
+    init_scope_system();
     printf("> ");
     return yyparse();
 }
