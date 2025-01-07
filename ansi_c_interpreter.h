@@ -33,7 +33,7 @@ struct symbol
     char *name;
     enum value_type type;
     union value_union value;
-    struct ast *func;     /* stmt for the function */
+    struct ast *func;         /* stmt for the function */
     struct symbol_list *syms; /* list of dummy args */
 };
 
@@ -63,6 +63,20 @@ struct scope
 };
 
 extern struct scope *current_scope;
+
+/* Function context structure */
+struct function_context
+{
+    struct symbol *function; /* Current function being executed */
+    struct value return_value;
+    int has_return;
+};
+
+/* Stack of function contexts to handle nested calls */
+#define MAX_FUNCTION_DEPTH 256
+extern struct function_context function_stack[];
+extern int function_depth;
+
 
 /* node types
  * + - * / |
@@ -144,6 +158,14 @@ struct symasgn
     struct ast *v; /* value */
     enum value_type result_type;
 };
+
+/* Function management functions */
+void push_function(struct symbol *func);
+struct function_context *pop_function(void);
+struct function_context *current_function(void);
+struct value eval_function_body(struct ast *body, struct symbol *func);
+struct symbol *lookup_function(char *name);
+
 
 /* Scope management functions */
 struct scope *push_scope(void);

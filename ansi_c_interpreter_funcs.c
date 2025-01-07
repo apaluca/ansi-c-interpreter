@@ -1,5 +1,3 @@
-/* ansi_c_interpreter_funcs.c */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -12,8 +10,9 @@ int debug = 1; /* debug flag */
 struct ast *root = NULL;
 enum value_type current_type = NO_TYPE;
 struct scope *current_scope = NULL;
-static int in_return = 0;
-static struct value return_value;
+struct function_context function_stack[MAX_FUNCTION_DEPTH];
+int function_depth = 0;
+static struct symbol *current_function_sym = NULL;
 
 struct scope *push_scope(void)
 {
@@ -189,6 +188,33 @@ void convert_value(void *dest, enum value_type dest_type, void *src, enum value_
         }
         break;
     }
+}
+
+struct symbol *lookup_function(char *name)
+{
+    struct scope *s = current_scope;
+    printf("DEBUG: Looking up function: %s\n", name);
+
+    while (s)
+    {
+        struct symbol_table *st = s->symbols;
+        while (st)
+        {
+            if (strcmp(st->sym->name, name) == 0)
+            {
+                // Check if it's actually a function (has func pointer)
+                if (st->sym->func != NULL)
+                {
+                    printf("DEBUG: Found function %s\n", name);
+                    return st->sym;
+                }
+            }
+            st = st->next;
+        }
+        s = s->parent;
+    }
+    printf("DEBUG: Function %s not found\n", name);
+    return NULL;
 }
 
 struct symbol *lookup(char *sym)
@@ -465,38 +491,142 @@ struct ast *newflow(int nodetype, struct ast *cond, struct ast *tl, struct ast *
     return (struct ast *)a;
 }
 
+/* Helper to reverse a symbol list */
+static struct symbol_list *reverse_symbol_list(struct symbol_list *sl)
+{
+    struct symbol_list *prev = NULL;
+    struct symbol_list *current = sl;
+    struct symbol_list *next = NULL;
+
+    while (current != NULL)
+    {
+        next = current->next;
+        current->next = prev;
+        prev = current;
+        current = next;
+    }
+
+    return prev;
+}
+
 void dodef(struct symbol *name, struct symbol_list *syms, struct ast *func)
 {
+    printf("DEBUG: Defining function %s\n", name->name);
     if (name->syms)
         symlistfree(name->syms);
     if (name->func)
         treefree(name->func);
-    name->syms = syms;
+    name->syms = reverse_symbol_list(syms); // Reverse the parameter list
     name->func = func;
 }
 
-static struct value eval_function_body(struct ast *body)
+/* Push new function context */
+void push_function(struct symbol *func)
+{
+    if (function_depth >= MAX_FUNCTION_DEPTH)
+    {
+        error("maximum function call depth exceeded");
+        return;
+    }
+    function_stack[function_depth].function = func;
+    function_stack[function_depth].has_return = 0;
+    function_depth++;
+}
+
+/* Pop function context */
+struct function_context *pop_function(void)
+{
+    if (function_depth <= 0)
+        return NULL;
+    function_depth--;
+    return &function_stack[function_depth];
+}
+
+/* Get current function context */
+struct function_context *current_function(void)
+{
+    if (function_depth <= 0)
+        return NULL;
+    return &function_stack[function_depth - 1];
+}
+
+/* Helper to count and store arguments in correct order */
+static struct value *evaluate_arguments(struct ast *args, int *count)
+{
+    struct value *arg_values = NULL;
+    *count = 0;
+
+    /* First count arguments */
+    struct ast *temp = args;
+    while (temp)
+    {
+        (*count)++;
+        if (temp->nodetype == 'L')
+        {
+            temp = temp->r;
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    if (*count > 0)
+    {
+        arg_values = malloc(*count * sizeof(struct value));
+        if (!arg_values)
+        {
+            error("out of memory");
+            return NULL;
+        }
+
+        /* Now evaluate in left-to-right order */
+        temp = args;
+        int i = 0;
+        while (temp && i < *count)
+        {
+            if (temp->nodetype == 'L')
+            {
+                arg_values[i] = eval(temp->l);
+                temp = temp->r;
+            }
+            else
+            {
+                arg_values[i] = eval(temp);
+                temp = NULL;
+            }
+            i++;
+        }
+    }
+
+    return arg_values;
+}
+
+struct value eval_function_body(struct ast *body, struct symbol *func)
 {
     struct value result;
-    in_return = 0;
 
-    /* Evaluate function body */
+    push_function(func);
+
     if (body)
     {
         result = eval(body);
-        /* If we hit a return statement, use that value */
-        if (in_return)
+
+        /* Check if we got a return value */
+        struct function_context *ctx = current_function();
+        if (ctx && ctx->has_return)
         {
-            result = return_value;
+            result = ctx->return_value;
         }
     }
     else
     {
         /* Default return value is 0 */
-        result.type = TYPE_INT;
+        result.type = func->type;
         result.value.i_val = 0;
     }
 
+    pop_function();
     return result;
 }
 
@@ -517,17 +647,31 @@ struct value eval(struct ast *a)
     /* return */
     case 'R':
     {
+        if (!current_function_sym)
+        {
+            error("return statement outside of function");
+            result.type = TYPE_INT;
+            result.value.i_val = 0;
+            return result;
+        }
+
         if (a->l)
         {
-            return_value = eval(a->l);
+            result = eval(a->l);
+            /* Convert to function's return type if needed */
+            if (result.type != current_function_sym->type)
+            {
+                struct value temp = result;
+                result.type = current_function_sym->type;
+                convert_value(&result.value, result.type, &temp.value, temp.type);
+            }
         }
         else
         {
-            return_value.type = TYPE_INT;
-            return_value.value.i_val = 0;
+            result.type = current_function_sym->type;
+            result.value.i_val = 0;
         }
-        in_return = 1;
-        return return_value;
+        return result;
     }
 
     /* declaration */
@@ -878,46 +1022,43 @@ struct value eval(struct ast *a)
 
     /* control flow */
     case 'I':
-    case 'W':
     {
-        if (a->nodetype == 'I')
+        v1 = eval(((struct flow *)a)->cond);
+        if (v1.value.i_val != 0)
         {
-            v1 = eval(((struct flow *)a)->cond);
-            if (v1.value.i_val != 0)
+            if (((struct flow *)a)->tl)
             {
-                if (((struct flow *)a)->tl)
-                {
-                    result = eval(((struct flow *)a)->tl);
-                }
-                else
-                {
-                    result.type = TYPE_INT;
-                    result.value.i_val = 0;
-                }
+                result = eval(((struct flow *)a)->tl);
             }
             else
             {
-                if (((struct flow *)a)->el)
-                {
-                    result = eval(((struct flow *)a)->el);
-                }
-                else
-                {
-                    result.type = TYPE_INT;
-                    result.value.i_val = 0;
-                }
+                result.type = TYPE_INT;
+                result.value.i_val = 0;
             }
         }
         else
-        { // WHILE
-            result.type = TYPE_INT;
-            result.value.i_val = 0;
-            if (((struct flow *)a)->tl)
+        {
+            if (((struct flow *)a)->el)
             {
-                while ((v1 = eval(((struct flow *)a)->cond)).value.i_val)
-                {
-                    result = eval(((struct flow *)a)->tl);
-                }
+                result = eval(((struct flow *)a)->el);
+            }
+            else
+            {
+                result.type = TYPE_INT;
+                result.value.i_val = 0;
+            }
+        }
+        return result;
+    }
+    case 'W':
+    {
+        result.type = TYPE_INT;
+        result.value.i_val = 0;
+        if (((struct flow *)a)->tl)
+        {
+            while ((v1 = eval(((struct flow *)a)->cond)).value.i_val)
+            {
+                result = eval(((struct flow *)a)->tl);
             }
         }
         return result;
@@ -995,6 +1136,7 @@ struct value eval(struct ast *a)
     {
         struct ufncall *f = (struct ufncall *)a;
         struct scope *save_scope = current_scope;
+        struct symbol *save_function = current_function_sym;
 
         if (!f->s->func)
         {
@@ -1006,49 +1148,51 @@ struct value eval(struct ast *a)
 
         /* Create new scope for function */
         push_scope();
+        current_function_sym = f->s;
 
-        /* Evaluate and store arguments */
-        struct ast *args = f->l;
+        /* Evaluate arguments */
+        int arg_count = 0;
+        struct value *args = evaluate_arguments(f->l, &arg_count);
+
+        /* Bind parameters in correct order */
         struct symbol_list *sl = f->s->syms;
-
-        while (sl && args)
+        for (int i = 0; i < arg_count && sl; i++)
         {
-            if (args->nodetype == 'L')
+            printf("DEBUG: Binding argument %d (value: ", i + 1);
+            switch (args[i].type)
             {
-                /* Multiple arguments */
-                v1 = eval(args->l);
-                convert_value(&sl->sym->value, sl->sym->type, &v1.value, v1.type);
-                args = args->r;
+            case TYPE_INT:
+                printf("%d", args[i].value.i_val);
+                break;
+            case TYPE_FLOAT:
+                printf("%f", args[i].value.f_val);
+                break;
+            case TYPE_DOUBLE:
+                printf("%g", args[i].value.d_val);
+                break;
             }
-            else
-            {
-                /* Single argument */
-                v1 = eval(args);
-                convert_value(&sl->sym->value, sl->sym->type, &v1.value, v1.type);
-                args = NULL;
-            }
+            printf(") to parameter %s\n", sl->sym->name);
+
+            convert_value(&sl->sym->value, sl->sym->type, &args[i].value, args[i].type);
             sl = sl->next;
         }
 
-        /* Check argument count */
-        if ((sl && !args) || (!sl && args))
+        if (args)
         {
-            error("wrong number of arguments in call to %s", f->s->name);
+            free(args);
         }
 
         /* Evaluate function body */
-        result = eval_function_body(f->s->func);
+        printf("DEBUG: Evaluating function body for %s\n", f->s->name);
+        result = eval(f->s->func);
+        printf("DEBUG: Function evaluation complete, return type %d\n", result.type);
 
-        /* Restore original scope */
+        /* Restore state */
         pop_scope();
         current_scope = save_scope;
+        current_function_sym = save_function;
 
-        /* Convert result to function's declared return type if needed */
-        struct value final_result;
-        final_result.type = f->s->type;
-        convert_value(&final_result.value, final_result.type, &result.value, result.type);
-
-        return final_result;
+        return result;
     }
 
     default:

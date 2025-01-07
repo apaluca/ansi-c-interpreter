@@ -2,6 +2,7 @@
 #  include <stdio.h>
 #  include <stdlib.h>
 #  include <unistd.h>
+#  include <string.h>
 #  include "ansi_c_interpreter.h"
 int yylex(void);
 int yyparse(void);
@@ -39,9 +40,9 @@ extern int column;
 %type <a> jump_statement translation_unit external_declaration
 %type <a> block_item block_item_list argument_expression_list
 %type <a> cast_expression
+%type <a> control_body
 
 %type <a> function_definition compound_statement_function
-%type <s> function_identifier
 %type <sl> parameter_list parameter_list_opt
 %type <s> parameter_declaration
 
@@ -91,16 +92,28 @@ argument_expression_list
         { $$ = newast('L', $1, $3); }
     ;
 
-function_identifier
-    : IDENTIFIER    { $$ = $1; }
-    ;
-
 postfix_expression
     : primary_expression    { $$ = $1; }
-    | function_identifier '(' ')'   
-        { $$ = newcall($1, NULL); }
-    | function_identifier '(' argument_expression_list ')'
-        { $$ = newcall($1, $3); }
+    | IDENTIFIER '(' ')'   
+        { 
+            printf("DEBUG: Creating function call node for %s\n", $1->name);
+            struct symbol *func = lookup_function($1->name);
+            if (!func) {
+                error("undefined function %s", $1->name);
+                func = $1;
+            }
+            $$ = newcall(func, NULL); 
+        }
+    | IDENTIFIER '(' argument_expression_list ')'
+        { 
+            printf("DEBUG: Creating function call node for %s with arguments\n", $1->name);
+            struct symbol *func = lookup_function($1->name);
+            if (!func) {
+                error("undefined function %s", $1->name);
+                func = $1;
+            }
+            $$ = newcall(func, $3); 
+        }
     ;
 
 unary_expression
@@ -264,15 +277,19 @@ expression_statement
     | expression ';'  { current_type = NO_TYPE; $$ = $1; }
     ;
 
+control_body
+    : statement  { $$ = $1; }
+    ;
+
 selection_statement
-    : IF '(' expression ')' statement %prec IFX
+    : IF '(' expression ')' control_body %prec IFX
         { $$ = newflow('I', $3, $5, NULL); }
-    | IF '(' expression ')' statement ELSE statement
+    | IF '(' expression ')' control_body ELSE control_body
         { $$ = newflow('I', $3, $5, $7); }
     ;
 
 iteration_statement
-    : WHILE '(' expression ')' statement
+    : WHILE '(' expression ')' control_body
         { $$ = newflow('W', $3, $5, NULL); }
     ;
 
@@ -361,19 +378,24 @@ external_declaration
 function_definition
     : type_specifier IDENTIFIER 
         {
-            /* Set function type and create scope before parameters */
+            /* Ensure function is added to global scope */
+            struct scope *save_scope = current_scope;
+            while (current_scope->parent) current_scope = current_scope->parent;
             settype($2, current_type);
+            current_scope = save_scope;  // Restore current scope
             push_scope(); /* Create scope for parameters and body */
         }
       '(' parameter_list_opt ')' compound_statement_function
         {
             debug_print("function_definition", "Processing function definition");
+            struct scope *save_scope = current_scope;
+            while (current_scope->parent) current_scope = current_scope->parent;
             dodef($2, $5, $7);
+            current_scope = save_scope;
             pop_scope();  /* Pop the function's scope */
             $$ = NULL;
         }
     ;
-
 parameter_list_opt
     : /* empty */     { $$ = NULL; }
     | parameter_list  { $$ = $1; }
