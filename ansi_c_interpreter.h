@@ -223,6 +223,7 @@ void yyerror(const char *s);
 
 /* error handling regarding the internals of the parser */
 void error(char *s, ...);
+void cleanup_and_exit(int status);
 
 extern struct ast *root;
 #define NO_TYPE -1

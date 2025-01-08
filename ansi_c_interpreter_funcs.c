@@ -240,7 +240,7 @@ struct symbol *lookup(char *sym)
         }
         // Only error if we're not in init_declarator
         printf("DEBUG: Symbol %s not found in any scope\n", sym);
-        error("reference to undefined variable %s\n", sym);
+        error("reference to undefined variable %s", sym);
         return NULL;
     }
 
@@ -703,7 +703,7 @@ struct value eval_function_body(struct ast *body, struct symbol *func)
 
 struct value eval(struct ast *a)
 {
-    struct value v1, v2, result;
+    struct value v1, v2, result = {0};
 
     if (!a)
     {
@@ -1480,6 +1480,25 @@ void treefree(struct ast *a)
     free(a); /* always free the node itself */
 }
 
+void cleanup_and_exit(int status)
+{
+    // Clean up any allocated memory
+    if (root)
+    {
+        treefree(root);
+        root = NULL;
+    }
+
+    // Clean up all scopes
+    while (current_scope)
+    {
+        pop_scope();
+    }
+
+    // Exit with error status
+    exit(status);
+}
+
 void error(char *s, ...)
 {
     va_list ap;
@@ -1488,6 +1507,8 @@ void error(char *s, ...)
     vfprintf(stderr, s, ap);
     fprintf(stderr, "\n");
     va_end(ap);
+
+    cleanup_and_exit(1);
 }
 
 /* debug: dump out an AST */

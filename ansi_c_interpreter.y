@@ -468,4 +468,5 @@ void yyerror(char const *s)
 {
     fflush(stdout);
     printf("\n%*s\n%*s\n", column, "^", column, s);
+    cleanup_and_exit(1);
 }
