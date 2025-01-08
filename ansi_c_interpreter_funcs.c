@@ -75,20 +75,21 @@ struct symbol *lookup_all_scopes(char *name)
     struct scope *s = current_scope;
     printf("DEBUG: Searching all scopes for: %s\n", name);
 
-    while (s && s->parent)
-    { // Only search parent scopes
-        s = s->parent;
+    while (s)
+    {
         struct symbol_table *st = s->symbols;
         while (st)
         {
             if (strcmp(st->sym->name, name) == 0)
             {
-                printf("DEBUG: Found %s in outer scope\n", name);
+                printf("DEBUG: Found %s in scope level %p\n", name, (void *)s);
                 return st->sym;
             }
             st = st->next;
         }
+        s = s->parent;
     }
+    printf("DEBUG: %s not found in any scope\n", name);
     return NULL;
 }
 
@@ -221,31 +222,78 @@ struct symbol *lookup(char *sym)
 {
     printf("DEBUG: Looking up symbol: %s\n", sym);
 
-    // Always try to find in current scope first
-    struct symbol *current = scope_lookup(sym);
-    if (current)
+    // For declarations (current_type is set), we always create in current scope
+    if (current_type != NO_TYPE)
     {
-        printf("DEBUG: Found symbol %s in current scope\n", sym);
-        return current;
-    }
-
-    // For variable references (not declarations), search outer scopes
-    if (current_type == NO_TYPE)
-    {
-        struct symbol *found = lookup_all_scopes(sym);
-        if (found)
+        // Even for declarations, first check current scope for duplicates
+        struct symbol *current = scope_lookup(sym);
+        if (current)
         {
-            printf("DEBUG: Found symbol %s in outer scope\n", sym);
-            return found;
+            printf("DEBUG: Found symbol %s in current scope for declaration\n", sym);
+            return current;
         }
-        // Only error if we're not in init_declarator
-        printf("DEBUG: Symbol %s not found in any scope\n", sym);
-        error("reference to undefined variable %s", sym);
-        return NULL;
+
+        // Create new symbol for declaration
+        printf("DEBUG: Creating new symbol %s for declaration\n", sym);
+        struct symbol *sp = malloc(sizeof(struct symbol));
+        if (!sp)
+        {
+            error("out of memory");
+            abort();
+        }
+
+        sp->name = strdup(sym);
+        if (!sp->name)
+        {
+            free(sp);
+            error("out of memory");
+            abort();
+        }
+
+        sp->type = current_type;
+        sp->func = NULL;
+        sp->syms = NULL;
+
+        // Initialize value based on type
+        switch (current_type)
+        {
+        case TYPE_INT:
+            sp->value.i_val = 0;
+            break;
+        case TYPE_FLOAT:
+            sp->value.f_val = 0.0f;
+            break;
+        case TYPE_DOUBLE:
+            sp->value.d_val = 0.0;
+            break;
+        }
+
+        // Add to current scope
+        struct symbol_table *st = malloc(sizeof(struct symbol_table));
+        if (!st)
+        {
+            free(sp->name);
+            free(sp);
+            error("out of space");
+            exit(0);
+        }
+        st->sym = sp;
+        st->next = current_scope->symbols;
+        current_scope->symbols = st;
+
+        return sp;
     }
 
-    // For declarations, create new symbol only if we're directly declaring it
-    printf("DEBUG: Creating new symbol %s in current scope\n", sym);
+    // For references (current_type is NO_TYPE), search all scopes
+    struct symbol *found = lookup_all_scopes(sym);
+    if (found)
+    {
+        printf("DEBUG: Found existing symbol %s in outer scope\n", sym);
+        return found;
+    }
+
+    // For undefined references, create in current scope
+    printf("DEBUG: Creating new symbol %s for undefined reference\n", sym);
     struct symbol *sp = malloc(sizeof(struct symbol));
     if (!sp)
     {
@@ -261,23 +309,10 @@ struct symbol *lookup(char *sym)
         abort();
     }
 
-    sp->type = current_type;
+    sp->type = TYPE_INT; // Default type for undefined variables
     sp->func = NULL;
     sp->syms = NULL;
-
-    // Initialize value based on type
-    switch (current_type)
-    {
-    case TYPE_INT:
-        sp->value.i_val = 0;
-        break;
-    case TYPE_FLOAT:
-        sp->value.f_val = 0.0f;
-        break;
-    case TYPE_DOUBLE:
-        sp->value.d_val = 0.0;
-        break;
-    }
+    sp->value.i_val = 0; // Initialize to 0
 
     // Add to current scope
     struct symbol_table *st = malloc(sizeof(struct symbol_table));
@@ -453,23 +488,15 @@ struct ast *newref(struct symbol *s)
     }
     a->nodetype = 'N';
 
-    // Temporarily set current_type to NO_TYPE to force a lookup
-    enum value_type saved_type = current_type;
-    current_type = NO_TYPE;
-
-    // Look up the symbol again to ensure we find it in any scope
+    // For variable references, search all scopes
     struct symbol *found = lookup_all_scopes(s->name);
-
-    // Restore the original current_type
-    current_type = saved_type;
-
     if (found)
     {
         a->s = found;
     }
     else
     {
-        a->s = s;
+        a->s = s; // Use the provided symbol if not found
     }
 
     ((struct ast *)a)->result_type = a->s->type;
