@@ -1,10 +1,22 @@
 #ifndef _ANSI_C_INTERPRETER_H_
 #define _ANSI_C_INTERPRETER_H_
 
+#include <setjmp.h>
+
+/* ========================================================================== */
+/*                              Parser Interface                              */
+/* ========================================================================== */
+
 int yyparse(void);
 int yylex(void);
+extern int yylineno;
+extern FILE *yyin;
+void yyerror(const char *s);
 
-/* Type system */
+/* ========================================================================== */
+/*                              Type System                                   */
+/* ========================================================================== */
+
 enum value_type
 {
     TYPE_INT,
@@ -12,13 +24,9 @@ enum value_type
     TYPE_DOUBLE
 };
 
-/* Format string for built-in functions scanf and printf */
-struct format_string
-{
-    char *str;
-};
+#define NO_TYPE -1
+extern enum value_type current_type;
 
-/* Value union to store different types */
 union value_union
 {
     int i_val;
@@ -26,14 +34,17 @@ union value_union
     double d_val;
 };
 
-/* Structure to hold a value and its type */
 struct value
 {
     enum value_type type;
     union value_union value;
 };
 
-/* symbol table */
+/* ========================================================================== */
+/*                              Symbol System                                 */
+/* ========================================================================== */
+
+/* Symbol table */
 struct symbol
 {
     char *name;
@@ -43,17 +54,12 @@ struct symbol
     struct symbol_list *syms; /* list of dummy args */
 };
 
-struct symbol *lookup(char *);
-
-/* list of symbols, for an argument list */
+/* List of symbols, for an argument list */
 struct symbol_list
 {
     struct symbol *sym;
     struct symbol_list *next;
 };
-
-struct symbol_list *newsymlist(struct symbol *sym, struct symbol_list *next);
-void symlistfree(struct symbol_list *sl);
 
 /* Scope management */
 struct symbol_table
@@ -68,24 +74,15 @@ struct scope
     struct scope *parent;         // Parent scope
 };
 
-extern struct scope *current_scope;
-
-/* Function context structure */
-struct function_context
-{
-    struct symbol *function; /* Current function being executed */
-    struct value return_value;
-};
-
-/* Stack of function contexts to handle nested calls */
-#define MAX_FUNCTION_DEPTH 256
-extern struct function_context function_stack[];
-extern int function_depth;
+/* ========================================================================== */
+/*                              AST Node Types                                */
+/* ========================================================================== */
 
 /* node types
  * + - * / |
  * 0-7 comparison ops, bit coded 04 equal, 02 less, 01 greater
  * M unary minus
+ * B block evaluation
  * L statement list
  * I IF statement
  * W WHILE statement
@@ -98,14 +95,7 @@ extern int function_depth;
  * R return statement
  */
 
-enum bifs
-{ /* built-in functions */
-  B_printf,
-  B_scanf
-};
-
-/* nodes in the Abstract Syntax Tree */
-/* all have common initial nodetype */
+/* Base AST node */
 struct ast
 {
     int nodetype;
@@ -114,6 +104,7 @@ struct ast
     struct ast *r;
 };
 
+/* Specialized node types */
 struct typecast
 {
     int nodetype;         /* type T for typecast */
@@ -126,6 +117,39 @@ struct strval
 {
     int nodetype; // type 'S' for string
     char *str;
+};
+
+struct numval
+{
+    int nodetype; /* type K */
+    enum value_type type;
+    union value_union value;
+};
+
+struct symref
+{
+    int nodetype; /* type N */
+    struct symbol *s;
+    enum value_type result_type;
+};
+
+struct symasgn
+{
+    int nodetype; /* type = */
+    struct symbol *s;
+    struct ast *v; /* value */
+    enum value_type result_type;
+};
+
+/* ========================================================================== */
+/*                              Function System                               */
+/* ========================================================================== */
+
+/* Built-in functions */
+enum bifs
+{
+    B_printf,
+    B_scanf
 };
 
 struct fncall
@@ -153,85 +177,119 @@ struct flow
     enum value_type result_type;
 };
 
-struct numval
+struct block
 {
-    int nodetype; /* type K */
-    enum value_type type;
-    union value_union value;
-};
-
-struct symref
-{
-    int nodetype; /* type N */
-    struct symbol *s;
+    int nodetype;              /* type 'B' for block */
+    struct ast *statements;    /* Statements in the block */
+    struct scope *block_scope; /* Scope for this block */
     enum value_type result_type;
 };
 
-struct symasgn
+/* Function context handling */
+struct function_context
 {
-    int nodetype; /* type = */
-    struct symbol *s;
-    struct ast *v; /* value */
-    enum value_type result_type;
+    struct symbol *function;    /* Current function being executed */
+    struct scope *caller_scope; /* Scope where function was called from */
+    struct scope *local_scope;  /* Function's local scope */
+    struct value return_value;
 };
 
-/* Function management functions */
-char *process_string_literal(char *str);
-void push_function(struct symbol *func);
-struct function_context *pop_function(void);
-struct function_context *current_function(void);
-struct value eval_function_body(struct ast *body, struct symbol *func);
-struct symbol *lookup_function(char *name);
+#define MAX_FUNCTION_DEPTH 256
+extern struct function_context function_stack[];
+extern int function_depth;
 
-/* Scope management functions */
+/* Format string for built-in functions */
+struct format_string
+{
+    char *str;
+};
+
+/* ========================================================================== */
+/*                              Global Variables                              */
+/* ========================================================================== */
+
+extern struct scope *current_scope;
+extern struct ast *root;
+extern int interactive_mode;
+extern int error_state;
+extern jmp_buf error_jmp;
+
+/* ========================================================================== */
+/*                              Function Prototypes                           */
+/* ========================================================================== */
+
+/* Symbol management */
+struct symbol *lookup(char *);
+struct symbol_list *newsymlist(struct symbol *sym, struct symbol_list *next);
+void symlistfree(struct symbol_list *sl);
+
+/* Scope management */
 struct scope *push_scope(void);
 void pop_scope(void);
 struct symbol *scope_lookup(char *name);      // Look up symbol in current scope only
 struct symbol *lookup_all_scopes(char *name); // Look up symbol in all accessible scopes
 
-/* Type system functions */
+/* Function management */
+char *process_string_literal(char *str);
+void push_function(struct symbol *func, struct scope *caller_scope);
+struct function_context *pop_function(void);
+struct function_context *current_function(void);
+struct value eval_function_body(struct ast *body, struct symbol *func);
+struct symbol *lookup_function(char *name);
+void dodef(struct symbol *name, struct symbol_list *syms, struct ast *stmts);
+
+/* Type system */
 struct ast *newdecl(struct symbol *s);
 void settype(struct symbol *sym, enum value_type type);
 enum value_type promote_types(enum value_type t1, enum value_type t2);
+void convert_binary_operands(struct value *v1, struct value *v2, enum value_type result_type);
+void safe_convert_value(struct value *dest, struct value *src);
 void convert_value(void *dest, enum value_type dest_type,
                    void *src, enum value_type src_type);
 
-/* build an AST */
+/* AST construction */
 struct ast *newast(int nodetype, struct ast *l, struct ast *r);
 struct ast *newcast(enum value_type type, struct ast *operand);
 struct ast *newstring(char *s);
 struct ast *newcmp(int cmptype, struct ast *l, struct ast *r);
 struct ast *newfunc(int functype, struct ast *l);
+struct ast *newblock(struct ast *statements, struct scope *scope);
 struct ast *newcall(struct symbol *s, struct ast *l);
 struct ast *newref(struct symbol *s);
 struct ast *newasgn(struct symbol *s, struct ast *v);
 struct ast *newnum(enum value_type type, union value_union value);
 struct ast *newflow(int nodetype, struct ast *cond, struct ast *tl, struct ast *tr);
 
-/* define a function */
-void dodef(struct symbol *name, struct symbol_list *syms, struct ast *stmts);
-
-/* evaluate an AST */
+/* Evaluation and cleanup */
 struct value eval(struct ast *);
-
-/* delete and free an AST */
 void treefree(struct ast *);
 
-/* interface to the lexer */
-extern int yylineno; /* from lexer */
-void yyerror(const char *s);
-
-/* error handling regarding the internals of the parser */
+/* Error handling */
 void error(char *s, ...);
 void cleanup_and_exit(int status);
 
-extern struct ast *root;
-#define NO_TYPE -1
-extern enum value_type current_type;
-
-extern int debug;
+/* Debugging */
 void dumpast(struct ast *a, int level);
 
-void debug_print(const char *rule, const char *msg);
+/* Running a script */
+int run_script(const char *filename);
+
+/* ========================================================================== */
+/*                                    DEBUG                                   */
+/* ========================================================================== */
+
+#define DEBUG 1
+
+#ifdef DEBUG
+#define DEBUG_PRINT_AST(ast, level)   \
+    do                                \
+    {                                 \
+        printf("\nAST Structure:\n"); \
+        dumpast(ast, level);          \
+        printf("\n");                 \
+    } while (0)
+#else
+#define DEBUG_PRINT_AST(ast, level) /* nothing */
+#endif
 
 #endif
