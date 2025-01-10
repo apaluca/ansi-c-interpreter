@@ -9,6 +9,7 @@
 
 int yyparse(void);
 int yylex(void);
+void yyrestart(FILE *input_file);
 extern int yylineno;
 extern FILE *yyin;
 void yyerror(const char *s);
@@ -89,10 +90,10 @@ struct scope
  * D declaration without initialization
  * N symbol ref
  * = assignment
- * S list of symbols
  * F built in function call
  * C user function call
  * R return statement
+ * S string for built-in functions
  */
 
 /* Base AST node */
@@ -111,12 +112,6 @@ struct typecast
     enum value_type type; /* target type */
     struct ast *operand;  /* expression to cast */
     enum value_type result_type;
-};
-
-struct strval
-{
-    int nodetype; // type 'S' for string
-    char *str;
 };
 
 struct numval
@@ -138,6 +133,14 @@ struct symasgn
     int nodetype; /* type = */
     struct symbol *s;
     struct ast *v; /* value */
+    enum value_type result_type;
+};
+
+struct strast
+{
+    int nodetype; /* type 'S' */
+    char *string;
+    struct ast *next; /* for argument lists */
     enum value_type result_type;
 };
 
@@ -181,7 +184,8 @@ struct block
 {
     int nodetype;              /* type 'B' for block */
     struct ast *statements;    /* Statements in the block */
-    struct scope *block_scope; /* Scope for this block */
+    struct scope *block_scope; /* Original scope during definition */
+    int needs_scope;           /* Flag indicating if this block needs a new scope */
     enum value_type result_type;
 };
 
@@ -190,19 +194,20 @@ struct function_context
 {
     struct symbol *function;    /* Current function being executed */
     struct scope *caller_scope; /* Scope where function was called from */
-    struct scope *local_scope;  /* Function's local scope */
+    struct value return_value;  /* Return value from function */
+    int has_returned;           /* Flag to indicate if function has returned */
+};
+
+/* Structure to rack return state with */
+struct return_state
+{
+    int has_returned;
     struct value return_value;
 };
 
 #define MAX_FUNCTION_DEPTH 256
 extern struct function_context function_stack[];
 extern int function_depth;
-
-/* Format string for built-in functions */
-struct format_string
-{
-    char *str;
-};
 
 /* ========================================================================== */
 /*                              Global Variables                              */
@@ -219,7 +224,9 @@ extern jmp_buf error_jmp;
 /* ========================================================================== */
 
 /* Symbol management */
+void init_symbol(struct symbol *sym);
 struct symbol *lookup(char *);
+struct symbol *lookup_function(char *name);
 struct symbol_list *newsymlist(struct symbol *sym, struct symbol_list *next);
 void symlistfree(struct symbol_list *sl);
 
@@ -235,7 +242,6 @@ void push_function(struct symbol *func, struct scope *caller_scope);
 struct function_context *pop_function(void);
 struct function_context *current_function(void);
 struct value eval_function_body(struct ast *body, struct symbol *func);
-struct symbol *lookup_function(char *name);
 void dodef(struct symbol *name, struct symbol_list *syms, struct ast *stmts);
 
 /* Type system */
@@ -259,6 +265,7 @@ struct ast *newref(struct symbol *s);
 struct ast *newasgn(struct symbol *s, struct ast *v);
 struct ast *newnum(enum value_type type, union value_union value);
 struct ast *newflow(int nodetype, struct ast *cond, struct ast *tl, struct ast *tr);
+struct ast *newstrast(char *str);
 
 /* Evaluation and cleanup */
 struct value eval(struct ast *);
@@ -278,7 +285,21 @@ int run_script(const char *filename);
 /*                                    DEBUG                                   */
 /* ========================================================================== */
 
-#define DEBUG 1
+void print_scope_chain(const char *prefix);
+
+//#define SCOPE_CHAIN_PRINT 1
+
+#ifdef SCOPE_CHAIN_PRINT
+#define PRINT_SCOPE_CHAIN(prefix)     \
+    do                                \
+    {                                 \
+        print_scope_chain(prefix);    \
+    } while (0)
+#else
+#define PRINT_SCOPE_CHAIN(prefix)
+#endif
+
+//#define DEBUG 1
 
 #ifdef DEBUG
 #define DEBUG_PRINT_AST(ast, level)   \
@@ -289,7 +310,16 @@ int run_script(const char *filename);
         printf("\n");                 \
     } while (0)
 #else
-#define DEBUG_PRINT_AST(ast, level) /* nothing */
+#define DEBUG_PRINT_AST(ast, level)
+#endif
+
+//#define DEBUG_MEM 1
+
+#ifdef DEBUG_MEM
+#define MEM_DEBUG(fmt, ...) \
+    fprintf(stderr, "MEM_DEBUG [%s:%d]: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__)
+#else
+#define MEM_DEBUG(fmt, ...)
 #endif
 
 #endif

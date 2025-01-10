@@ -1,0 +1,164 @@
+/* Test script for my interpreter
+   Testing all features according to grading thresholds */
+
+// 1. Data Types and Initialization
+int a;
+a = 5;
+double b;
+b = 3.14;
+float c;
+c = 2.5f;
+printf("Data types test:\n");
+printf("a = %d, ", a);
+printf("b = %f, ", b);
+printf("c = %f\n", c);
+
+// 2. Arithmetic Operations
+int sum;
+sum = a + 2;
+double prod;
+prod = b * c;
+float div;
+div = c / 2;
+printf("\nArithmetic test:\n");
+printf("sum = %d, ", sum);
+printf("prod = %f, ", prod);
+printf("div = %f\n", div);
+
+// 3. Control Structures
+printf("\nControl structures test:\n");
+int x;
+x = 0;
+while (x < 3) {
+    if (x > 1) {
+        if (x == 2) {
+            printf("x is exactly 2\n");
+        } else {
+            printf("x is greater than 1 but not 2\n");
+        }
+    } else {
+        if (x == 0) {
+            printf("x is zero\n");
+        } else {
+            printf("x is one\n");
+        }
+    }
+    x = x + 1;
+}
+
+// 4. Input/Output
+printf("\nInput/Output test:\n");
+printf("Current value of a: %d\n", a);
+printf("Type a new value for a: ");
+scanf("%d", a);
+printf("New value of a: %d\n", a);
+
+// 5. Code Blocks and Scope Testing
+printf("\nEnhanced Block Scope Tests:\n");
+
+int outer;
+outer = 100;
+
+{
+    int inner1;
+    inner1 = outer + 10;  // Should access outer variable
+    printf("inner1: %d\n", inner1);
+    
+    {
+        int inner2;
+        inner2 = inner1 + 10;  // Should access inner1
+        printf("inner2: %d\n", inner2);
+        
+        // Variable shadowing test
+        int outer;  // Shadows outer variable
+        outer = 500;
+        printf("shadowed outer: %d\n", outer);
+    }
+    
+    // Test scope isolation
+    int test_var;
+    test_var = 75;
+    {
+        int test_var;  // Different variable in nested scope
+        test_var = 25;
+        printf("inner test_var: %d\n", test_var);
+    }
+    printf("outer test_var: %d\n", test_var);
+}
+
+printf("original outer: %d\n", outer);
+
+// 6. Function Testing
+printf("\nEnhanced Function Tests:\n");
+
+// Function to test basic arithmetic and return
+int calculate(int x, int y) {
+    int result;
+    result = x * y + 5;
+    return result;
+}
+
+// Function with nested blocks and scope testing
+int scope_test(int param) {
+    int level1;
+    level1 = param + 1;
+    
+    {
+        int level2;
+        level2 = level1 + 1;
+        
+        {
+            int level3;
+            level3 = level2 + 1;
+            return level3;  // Return from nested block
+        }
+    }
+    return 0;  // Should never reach here
+}
+
+// Function that calls other functions
+int composite(int x, int y) {
+    int calc_result;
+    calc_result = calculate(x, y);  // Call first function
+    
+    int scope_result;
+    scope_result = scope_test(calc_result);  // Call second function with result
+    
+    return scope_result;
+}
+
+// Now test all the functions
+int test1;
+test1 = calculate(5, 3);
+printf("calculate(5, 3) = %d\n", test1);
+
+int test2;
+test2 = scope_test(10);
+printf("scope_test(10) = %d\n", test2);
+
+int test3;
+test3 = composite(4, 2);
+printf("composite(4, 2) = %d\n", test3);
+
+// 7. Type Conversions
+double d1;
+d1 = (double)a;
+float f1;
+f1 = (float)b;
+int i1;
+i1 = (int)c;
+printf("\nType conversion test:\n");
+printf("double: %f, ", d1);
+printf("float: %f, ", f1);
+printf("int: %d\n", i1);
+
+/* 8. Comments Test
+   This is a multi-line comment */
+// This is a single-line comment
+
+// 9. Error handling
+// printf("Error handling test:\n");
+// printf("a = a / 0;");
+// a = a / 0;
+
+printf("\nTest script completed successfully!\n");

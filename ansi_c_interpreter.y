@@ -9,8 +9,6 @@
 #include <string.h>
 #include "ansi_c_interpreter.h"
 
-int yylex(void);
-int yyparse(void);
 extern char yytext[];
 extern int column;
 %}
@@ -25,7 +23,6 @@ extern int column;
     struct symbol *s;
     struct symbol_list *sl;
     int fn;
-    struct format_string *format_str;
 }
 
 /* ========================================================================== */
@@ -35,7 +32,7 @@ extern int column;
 /* Terminals with values */
 %token <v> CONSTANT
 %token <s> IDENTIFIER
-%token <format_str> STRING_LITERAL
+%token <a> STRING_LITERAL
 %token <fn> BUILTIN
 
 /* Operators */
@@ -127,14 +124,13 @@ postfix_expression
                     error("scanf requires a variable reference");
                     $$ = NULL;
                 } else {
-                    struct ast *args = newast('L', newstring($3->str), $5);
+                    struct ast *args = newast('L', $3, $5);
                     $$ = newfunc($1, args);
                 }
             } else {
-                struct ast *args = newast('L', newstring($3->str), $5);
+                struct ast *args = newast('L', $3, $5);
                 $$ = newfunc($1, args);
             }
-            free($3);
         }
     | BUILTIN '(' STRING_LITERAL ')'
         {
@@ -142,9 +138,8 @@ postfix_expression
                 error("scanf requires a variable argument");
                 $$ = NULL;
             } else {
-                $$ = newfunc($1, newstring($3->str));
+                $$ = newfunc($1, $3);
             }
-            free($3);
         }
     ;
 
@@ -202,21 +197,17 @@ assignment_expression
     : equality_expression    { $$ = $1; }
     | primary_expression '=' assignment_expression
         { 
-            printf("\nDEBUG: Processing assignment\n");
             if ($1->nodetype == 'N') {  // Must be an identifier reference
                 struct symref *ref = (struct symref *)$1;
-                printf("DEBUG: Assignment target is symbol '%s'\n", ref->s->name);
                 
                 // Look up the symbol in all accessible scopes
                 struct symbol *sym = lookup_all_scopes(ref->s->name);
                 if (sym) {
-                    printf("DEBUG: Found symbol for assignment, creating assignment node\n");
                     $$ = newasgn(sym, $3);
                 } else {
                     error("assignment to undeclared variable '%s'", ref->s->name);
                 }
             } else {
-                printf("DEBUG: Invalid assignment target type: %c\n", $1->nodetype);
                 yyerror("Invalid assignment target");
             }
         }
@@ -261,29 +252,39 @@ statement
 
 compound_statement
     : '{' {
-        printf("\nDEBUG: compound_statement - Creating new scope\n");
-        push_scope();
-        printf("DEBUG: compound_statement - New scope created at %p\n", 
-               (void *)current_scope);
+        MEM_DEBUG("Starting new compound statement");
+        struct scope *new_scope = push_scope();
+        MEM_DEBUG("Created new scope %p for compound statement", (void*)new_scope);
     } block_item_list '}'
     {
-        printf("\nDEBUG: compound_statement - Creating block node\n");
-        $$ = newblock($3, current_scope);
+        MEM_DEBUG("Creating block for compound statement");
+        struct ast *block = newblock($3, current_scope);
+        $$ = block;
     }
     | '{' {
-        printf("\nDEBUG: compound_statement - Creating new scope (empty block)\n");
-        push_scope();
+        MEM_DEBUG("Starting empty compound statement");
+        struct scope *new_scope = push_scope();
+        MEM_DEBUG("Created new scope %p for empty compound statement", (void*)new_scope);
     } '}'
     {
-        printf("DEBUG: compound_statement - Creating empty block node\n");
+        MEM_DEBUG("Creating empty block");
         $$ = newblock(NULL, current_scope);
     }
     ;
 
 block_item_list
-    : block_item    { $$ = $1; }
+    : block_item    
+        { $$ = $1; }
     | block_item_list block_item
-        { $$ = newast('L', $1, $2); }
+        { 
+            if ($1 && $2) {
+                $$ = newast('L', $1, $2);
+            } else if ($1) {
+                $$ = $1;
+            } else {
+                $$ = $2;
+            }
+        }
     ;
 
 block_item
@@ -292,8 +293,16 @@ block_item
     ;
 
 expression_statement
-    : ';'             { current_type = NO_TYPE; $$ = NULL; }
-    | expression ';'  { current_type = NO_TYPE; $$ = $1; }
+    : ';'                   
+        { 
+            current_type = NO_TYPE; 
+            $$ = NULL; 
+        }
+    | expression ';'        
+        { 
+            current_type = NO_TYPE; 
+            $$ = $1; 
+        }
     ;
 
 control_body
@@ -326,7 +335,7 @@ translation_unit
         { 
             if ($1) {
                 DEBUG_PRINT_AST($1, 0);
-                if (!error_state) {  // Only evaluate if no error
+                if (!error_state) {
                     struct value result = eval($1);
                     treefree($1);
                 }
@@ -340,7 +349,7 @@ translation_unit
         {
             if ($2) {
                 DEBUG_PRINT_AST($2, 0);
-                if (!error_state) {  // Only evaluate if no error
+                if (!error_state) {
                     struct value result = eval($2);
                     treefree($2);
                 }
@@ -352,12 +361,26 @@ translation_unit
         }
     | RUN STRING_LITERAL ';'
         {
-            if (!error_state) {  // Only run if no error
-                char* filename = $2->str;
-                if (run_script(filename) != 0) {
-                    error("Failed to run script: %s", filename);
+            if (!error_state) {
+                struct strast *s = (struct strast *)$2;
+                if (run_script(s->string) != 0) {
+                    error("Failed to run script: %s", s->string);
                 }
-                free($2);
+                treefree($2);
+            }
+            if (interactive_mode) {
+                printf("> ");
+                fflush(stdout);
+            }
+        }
+    | translation_unit RUN STRING_LITERAL ';'
+        {
+            if (!error_state) {
+                struct strast *s = (struct strast *)$3;
+                if (run_script(s->string) != 0) {
+                    error("Failed to run script: %s", s->string);
+                }
+                treefree($3);
             }
             if (interactive_mode) {
                 printf("> ");
@@ -391,12 +414,10 @@ function_definition
             current_scope->symbols = st;
 
             current_scope = save_scope;
-            printf("\nDEBUG: Creating function scope for '%s'\n", $2->name);
             push_scope();
         }
       '(' parameter_list_opt ')' compound_statement_function
         {
-            printf("\nDEBUG: Completing function definition for '%s'\n", $2->name);
             struct scope *save_scope = current_scope;
             while (current_scope->parent) current_scope = current_scope->parent;
             dodef($2, $5, $7);
@@ -421,7 +442,6 @@ parameter_list
 parameter_declaration
     : type_specifier IDENTIFIER
         {
-            printf("\nDEBUG: Processing parameter '%s'\n", $2->name);
             settype($2, current_type);
             
             /* Add parameter to current scope */
@@ -433,9 +453,6 @@ parameter_declaration
             st->sym = $2;
             st->next = current_scope->symbols;
             current_scope->symbols = st;
-            
-            printf("DEBUG: Added parameter '%s' to scope %p\n", 
-                   $2->name, (void *)current_scope);
             
             $$ = $2;
         }

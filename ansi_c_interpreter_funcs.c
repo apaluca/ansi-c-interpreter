@@ -27,40 +27,8 @@ jmp_buf error_jmp;
 /*                              Scope Management                              */
 /* ========================================================================== */
 
-static void debug_print_symbol_table(const char *msg)
-{
-    printf("\nDEBUG: %s\n", msg);
-    printf("DEBUG: Current scope at %p\n", (void *)current_scope);
-    if (!current_scope)
-    {
-        printf("DEBUG: No current scope!\n");
-        return;
-    }
-
-    struct symbol_table *st = current_scope->symbols;
-    printf("DEBUG: Symbol table entries:\n");
-    while (st)
-    {
-        if (st->sym)
-        {
-            printf("DEBUG:   Symbol: %s (type: %d) at %p\n",
-                   st->sym->name ? st->sym->name : "NULL",
-                   st->sym->type,
-                   (void *)st->sym);
-        }
-        else
-        {
-            printf("DEBUG:   NULL symbol entry\n");
-        }
-        st = st->next;
-    }
-    printf("\n");
-}
-
 struct scope *push_scope(void)
 {
-    printf("DEBUG: Current scope before push: %p\n", (void *)current_scope);
-
     struct scope *new_scope = malloc(sizeof(struct scope));
     if (!new_scope)
     {
@@ -72,198 +40,138 @@ struct scope *push_scope(void)
     new_scope->parent = current_scope;
     current_scope = new_scope;
 
-    printf("DEBUG: New scope created at %p\n", (void *)new_scope);
-    printf("DEBUG: Parent scope: %p\n", (void *)new_scope->parent);
+    PRINT_SCOPE_CHAIN("After Push");
 
     return new_scope;
 }
 
 void pop_scope(void)
 {
-    printf("\nDEBUG: pop_scope() - Beginning scope pop\n");
     if (!current_scope)
     {
-        printf("DEBUG: pop_scope() - No scope to pop!\n");
+        MEM_DEBUG("Warning: Attempting to pop null scope");
         return;
     }
+
+    MEM_DEBUG("Popping scope %p (parent: %p)",
+              (void *)current_scope,
+              (void *)(current_scope->parent));
 
     struct scope *scope_to_pop = current_scope;
     struct scope *parent_scope = current_scope->parent;
 
-    printf("DEBUG: pop_scope() - Popping scope %p (parent: %p)\n",
-           (void *)scope_to_pop, (void *)parent_scope);
-
-    // Print all symbols in the scope before removing them
-    printf("DEBUG: pop_scope() - Symbols in scope being popped:\n");
+    // First free all symbols in this scope
     struct symbol_table *st = scope_to_pop->symbols;
     while (st)
     {
-        if (st->sym && st->sym->name)
+        if (st->sym)
         {
-            printf("DEBUG: pop_scope() - Found symbol '%s'\n", st->sym->name);
-
-            // Check if symbol exists in parent scope before freeing
-            if (parent_scope)
+            // Don't free function definitions or their symbols
+            if (!st->sym->func)
             {
-                struct scope *save_scope = current_scope;
-                current_scope = parent_scope;
-                struct symbol *parent_sym = lookup_all_scopes(st->sym->name);
-                current_scope = save_scope;
-
-                if (!parent_sym)
-                {
-                    printf("DEBUG: pop_scope() - Freeing symbol '%s'\n", st->sym->name);
+                MEM_DEBUG("Freeing symbol %s in scope %p",
+                          st->sym->name ? st->sym->name : "(unnamed)",
+                          (void *)scope_to_pop);
+                if (st->sym->name)
                     free(st->sym->name);
-                    free(st->sym);
-                }
-                else
-                {
-                    printf("DEBUG: pop_scope() - Symbol '%s' exists in parent scope, not freeing\n",
-                           st->sym->name);
-                }
+                if (st->sym->syms)
+                    symlistfree(st->sym->syms);
+                free(st->sym);
             }
             else
             {
-                printf("DEBUG: pop_scope() - No parent scope, freeing symbol '%s'\n",
-                       st->sym->name);
-                free(st->sym->name);
-                free(st->sym);
+                MEM_DEBUG("Preserving function symbol %s", st->sym->name);
             }
         }
-
         struct symbol_table *next = st->next;
         free(st);
         st = next;
     }
 
-    free(scope_to_pop);
+    // Now free the scope itself
     current_scope = parent_scope;
+    free(scope_to_pop);
 
-    printf("DEBUG: pop_scope() - Scope pop complete, current scope is now %p\n",
-           (void *)current_scope);
+    PRINT_SCOPE_CHAIN("After Pop");
 }
 
 struct symbol *scope_lookup(char *name)
 {
-    printf("\nDEBUG: scope_lookup('%s') in scope %p\n",
-           name ? name : "NULL",
-           (void *)current_scope);
-
-    if (!current_scope)
+    if (!current_scope || !name)
     {
-        printf("DEBUG: scope_lookup - no current scope\n");
-        return NULL;
-    }
-
-    if (!name)
-    {
-        printf("DEBUG: scope_lookup - null name provided\n");
         return NULL;
     }
 
     struct symbol_table *st = current_scope->symbols;
     while (st)
     {
-        printf("DEBUG: checking symbol table entry %p\n", (void *)st);
-        if (!st->sym)
+        if (st->sym && st->sym->name && strcmp(st->sym->name, name) == 0)
         {
-            printf("DEBUG: null symbol in table\n");
-            st = st->next;
-            continue;
-        }
-
-        if (!st->sym->name)
-        {
-            printf("DEBUG: symbol has null name\n");
-            st = st->next;
-            continue;
-        }
-
-        printf("DEBUG: comparing '%s' with '%s'\n", name, st->sym->name);
-        if (strcmp(st->sym->name, name) == 0)
-        {
-            printf("DEBUG: found match!\n");
             return st->sym;
         }
         st = st->next;
     }
 
-    printf("DEBUG: no match found\n");
     return NULL;
 }
 
 struct symbol *lookup_all_scopes(char *name)
 {
-    printf("\nDEBUG: lookup_all_scopes('%s') started\n", name);
-    printf("DEBUG: lookup_all_scopes() - Current scope: %p\n", (void *)current_scope);
-    printf("DEBUG: lookup_all_scopes() - Function depth: %d\n", function_depth);
+    MEM_DEBUG("Looking up symbol %s in all scopes", name);
 
-    // First check current scope chain
+    // For declarations, only look in current scope
+    if (current_type != NO_TYPE)
+    {
+        struct symbol *current = scope_lookup(name);
+        if (current)
+        {
+            MEM_DEBUG("Found %s in current scope during declaration", name);
+            return current;
+        }
+        return NULL;
+    }
+
+    // For non-declarations (expressions), look in all scopes
     struct scope *s = current_scope;
-    int level = 0;
+    struct symbol *innermost = NULL;
+    struct symbol *outermost = NULL;
 
     while (s)
     {
-        printf("DEBUG: lookup_all_scopes() - Checking scope level %d at %p\n",
-               level, (void *)s);
-
+        MEM_DEBUG("Searching scope %p for %s", (void *)s, name);
         struct symbol_table *st = s->symbols;
         while (st)
         {
-            if (st->sym && st->sym->name)
+            if (st->sym && st->sym->name && strcmp(st->sym->name, name) == 0)
             {
-                printf("DEBUG: lookup_all_scopes() - Checking symbol '%s'\n",
-                       st->sym->name);
-                if (strcmp(st->sym->name, name) == 0)
+                if (!innermost)
                 {
-                    printf("DEBUG: lookup_all_scopes() - Found '%s' in scope %p\n",
-                           name, (void *)s);
-                    return st->sym;
+                    innermost = st->sym;
+                    MEM_DEBUG("Found innermost definition of %s", name);
                 }
+                outermost = st->sym;
+                MEM_DEBUG("Found outermost definition of %s", name);
             }
             st = st->next;
         }
         s = s->parent;
-        level++;
     }
 
-    // If not found and we're in a function, check caller's scope chain
-    if (function_depth > 0)
+    // If this is an assignment target, use the innermost (shadowed) version
+    if (current_scope && scope_lookup(name))
     {
-        struct function_context *ctx = &function_stack[function_depth - 1];
-        printf("DEBUG: lookup_all_scopes() - Checking caller's scope chain from %p\n",
-               (void *)ctx->caller_scope);
-
-        s = ctx->caller_scope;
-        level = 0;
-
-        while (s)
-        {
-            printf("DEBUG: lookup_all_scopes() - Checking caller scope level %d at %p\n",
-                   level, (void *)s);
-
-            struct symbol_table *st = s->symbols;
-            while (st)
-            {
-                if (st->sym && st->sym->name)
-                {
-                    printf("DEBUG: lookup_all_scopes() - Checking symbol '%s'\n",
-                           st->sym->name);
-                    if (strcmp(st->sym->name, name) == 0)
-                    {
-                        printf("DEBUG: lookup_all_scopes() - Found '%s' in caller scope %p\n",
-                               name, (void *)s);
-                        return st->sym;
-                    }
-                }
-                st = st->next;
-            }
-            s = s->parent;
-            level++;
-        }
+        MEM_DEBUG("Returning innermost definition of %s for assignment", name);
+        return innermost;
     }
 
-    printf("DEBUG: lookup_all_scopes() - Symbol '%s' not found in any scope\n", name);
+    // For expressions, use the outermost version
+    if (outermost)
+    {
+        MEM_DEBUG("Returning outermost definition of %s for expression", name);
+        return outermost;
+    }
+
+    MEM_DEBUG("Symbol %s not found in any scope", name);
     return NULL;
 }
 
@@ -425,6 +333,25 @@ void convert_value(void *dest, enum value_type dest_type, void *src, enum value_
 /*                              Symbol Management                             */
 /* ========================================================================== */
 
+void init_symbol(struct symbol *sym)
+{
+    if (!sym)
+        return;
+
+    switch (sym->type)
+    {
+    case TYPE_INT:
+        sym->value.i_val = 0;
+        break;
+    case TYPE_FLOAT:
+        sym->value.f_val = 0.0f;
+        break;
+    case TYPE_DOUBLE:
+        sym->value.d_val = 0.0;
+        break;
+    }
+}
+
 struct symbol *lookup_function(char *name)
 {
     struct scope *s = current_scope;
@@ -447,7 +374,6 @@ struct symbol *lookup_function(char *name)
 
 struct symbol *lookup(char *sym)
 {
-    printf("\nDEBUG: lookup('%s') started\n", sym);
 
     struct symbol *found = lookup_all_scopes(sym);
     if (!found && current_type == NO_TYPE)
@@ -458,10 +384,6 @@ struct symbol *lookup(char *sym)
 
     return found;
 }
-
-/* ========================================================================== */
-/*                              AST Building                                  */
-/* ========================================================================== */
 
 struct symbol_list *newsymlist(struct symbol *sym, struct symbol_list *next)
 {
@@ -475,6 +397,22 @@ struct symbol_list *newsymlist(struct symbol *sym, struct symbol_list *next)
     sl->next = next;
     return sl;
 }
+
+void symlistfree(struct symbol_list *sl)
+{
+    struct symbol_list *nsl;
+
+    while (sl)
+    {
+        nsl = sl->next;
+        free(sl);
+        sl = nsl;
+    }
+}
+
+/* ========================================================================== */
+/*                              AST Building                                  */
+/* ========================================================================== */
 
 struct ast *newast(int nodetype, struct ast *l, struct ast *r)
 {
@@ -524,27 +462,25 @@ struct ast *newcast(enum value_type type, struct ast *operand)
 
 struct ast *newstring(char *s)
 {
-    struct strval *sv = malloc(sizeof(struct strval));
-    if (!sv)
+    struct strast *str = malloc(sizeof(struct strast));
+    if (!str)
     {
         error("out of space");
         exit(0);
     }
-    sv->nodetype = 'S';
-    sv->str = s;
-    return (struct ast *)sv;
+    str->nodetype = 'S';
+    str->string = s;
+    str->next = NULL;
+    str->result_type = TYPE_INT;
+    return (struct ast *)str;
 }
 
 struct ast *newdecl(struct symbol *s)
 {
-    printf("\nDEBUG: Processing declaration for %s\n", s->name);
-
-    /* Check for redefinition */
+    /* Check for redefinition in current scope only */
     struct symbol *existing = scope_lookup(s->name);
     if (existing)
     {
-        printf("DEBUG: Found existing declaration of '%s'\n", s->name);
-        // Free the duplicate symbol we were trying to declare
         if (s->name)
             free(s->name);
         if (s->func)
@@ -552,7 +488,7 @@ struct ast *newdecl(struct symbol *s)
         if (s->syms)
             symlistfree(s->syms);
         free(s);
-        error("redefinition of '%s'", existing->name);
+        error("redefinition of '%s' in current scope", existing->name);
         return NULL;
     }
 
@@ -571,12 +507,23 @@ struct ast *newdecl(struct symbol *s)
         return NULL;
     }
 
+    /* Initialize the symbol value based on type */
+    switch (s->type)
+    {
+    case TYPE_INT:
+        s->value.i_val = 0;
+        break;
+    case TYPE_FLOAT:
+        s->value.f_val = 0.0f;
+        break;
+    case TYPE_DOUBLE:
+        s->value.d_val = 0.0;
+        break;
+    }
+
     st->sym = s;
     st->next = current_scope->symbols;
     current_scope->symbols = st;
-
-    printf("DEBUG: Added symbol '%s' to scope %p\n", s->name, (void *)current_scope);
-    printf("DEBUG: Symbol type is %d\n", s->type);
 
     struct ast *a = malloc(sizeof(struct ast));
     if (!a)
@@ -599,7 +546,6 @@ struct ast *newdecl(struct symbol *s)
     a->r = NULL;
     a->result_type = s->type;
 
-    printf("DEBUG: Successfully created declaration node\n");
     return a;
 }
 
@@ -635,27 +581,29 @@ struct ast *newcmp(int cmptype, struct ast *l, struct ast *r)
 
 struct ast *newblock(struct ast *statements, struct scope *scope)
 {
+    MEM_DEBUG("Creating new block with original scope %p", (void *)scope);
     struct block *b = malloc(sizeof(struct block));
     if (!b)
     {
         error("out of space");
         return NULL;
     }
+
     b->nodetype = 'B';
     b->statements = statements;
-    b->block_scope = scope;
+    b->block_scope = scope; // Store original scope
+    b->needs_scope = 1;     // Default to creating new scope during execution
 
-    // Set result type based on the last statement in the block
     if (statements)
     {
-        b->result_type = statements->result_type;
+        ((struct ast *)b)->result_type = statements->result_type;
     }
     else
     {
-        b->result_type = TYPE_INT; // Default type for empty blocks
+        ((struct ast *)b)->result_type = TYPE_INT;
     }
 
-    printf("DEBUG: newblock() - Created block node with scope %p\n", (void *)scope);
+    MEM_DEBUG("Block created with statements at %p", (void *)statements);
     return (struct ast *)b;
 }
 
@@ -691,7 +639,6 @@ struct ast *newcall(struct symbol *s, struct ast *l)
 
 struct ast *newref(struct symbol *s)
 {
-    printf("\nDEBUG: newref('%s')\n", s->name);
     struct symref *a = malloc(sizeof(struct symref));
     if (!a)
     {
@@ -700,25 +647,21 @@ struct ast *newref(struct symbol *s)
     }
 
     // Always look up the symbol in all accessible scopes
-    printf("DEBUG: Looking up symbol '%s' in all scopes\n", s->name);
     struct symbol *found = lookup_all_scopes(s->name);
-    printf("DEBUG: lookup_all_scopes result: %p\n", (void *)found);
 
     if (found)
     {
-        printf("DEBUG: Found symbol '%s' with type %d\n", found->name, found->type);
         a->s = found;
     }
     else if (current_type != NO_TYPE)
     {
-        printf("DEBUG: Using new symbol '%s' with type %d\n", s->name, s->type);
         a->s = s;
     }
     else
     {
         error("undefined variable '%s'", s->name);
         free(a);
-        return NULL;
+        exit(0);
     }
 
     ((struct ast *)a)->nodetype = 'N';
@@ -769,9 +712,44 @@ struct ast *newflow(int nodetype, struct ast *cond, struct ast *tl, struct ast *
     return (struct ast *)a;
 }
 
+struct ast *newstrast(char *str)
+{
+    struct strast *s = malloc(sizeof(struct strast));
+
+    if (!str)
+    {
+        error("null string passed to newstrast");
+        exit(0);
+    }
+
+    if (!s)
+    {
+        error("out of memory");
+        exit(0);
+    }
+
+    s->nodetype = 'S';
+    s->string = str; // Takes ownership of the string
+    s->next = NULL;
+    s->result_type = TYPE_INT;
+
+    return (struct ast *)s;
+}
+
 /* ========================================================================== */
 /*                              AST Management                                */
 /* ========================================================================== */
+
+void free_string_ast(struct strast *s)
+{
+    if (!s)
+        return;
+    if (s->string)
+    {
+        free(s->string);
+        s->string = NULL;
+    }
+}
 
 void treefree(struct ast *a)
 {
@@ -781,11 +759,8 @@ void treefree(struct ast *a)
     // Add a guard against invalid node types
     if (a->nodetype < 0 || (a->nodetype > 'z' && a->nodetype < 256))
     {
-        printf("DEBUG: Skipping invalid node type %d\n", a->nodetype);
         return;
     }
-
-    printf("DEBUG: Freeing node type %c\n", a->nodetype);
 
     switch (a->nodetype)
     {
@@ -803,7 +778,6 @@ void treefree(struct ast *a)
     case 'L':
         if (a->r)
         {
-            printf("DEBUG: Freeing right subtree of %c\n", a->nodetype);
             treefree(a->r);
         }
         /* fall through */
@@ -815,7 +789,6 @@ void treefree(struct ast *a)
     case 'F':
         if (a->l)
         {
-            printf("DEBUG: Freeing left subtree of %c\n", a->nodetype);
             treefree(a->l);
         }
         break;
@@ -824,59 +797,67 @@ void treefree(struct ast *a)
     case 'D':
     case 'K':
     case 'N':
-        printf("DEBUG: No subtrees to free for %c\n", a->nodetype);
         break;
 
     case '=':
         if (((struct symasgn *)a)->v)
         {
-            printf("DEBUG: Freeing assignment value\n");
             treefree(((struct symasgn *)a)->v);
         }
         break;
 
     case 'I':
     case 'W':
-        printf("DEBUG: Freeing flow node parts\n");
         if (((struct flow *)a)->cond)
+        {
             treefree(((struct flow *)a)->cond);
+        }
         if (((struct flow *)a)->tl)
+        {
             treefree(((struct flow *)a)->tl);
+        }
         if (((struct flow *)a)->el)
+        {
             treefree(((struct flow *)a)->el);
+        }
         break;
 
     case 'S':
-        printf("DEBUG: Freeing string\n");
-        if (((struct strval *)a)->str)
-            free(((struct strval *)a)->str);
+    {
+        struct strast *s = (struct strast *)a;
+        if (s->string)
+        {
+            free(s->string);
+            s->string = NULL;
+        }
+        if (s->next)
+        {
+            treefree((struct ast *)s->next);
+            s->next = NULL;
+        }
         break;
-
-    case 'T':
-        printf("DEBUG: Freeing typecast\n");
-        if (((struct typecast *)a)->operand)
-            treefree(((struct typecast *)a)->operand);
-        break;
+    }
 
     case 'B':
     {
         struct block *b = (struct block *)a;
-        printf("DEBUG: treefree() - Freeing block node with scope %p\n",
-               (void *)b->block_scope);
+        // First free any statements in the block
         if (b->statements)
         {
             treefree(b->statements);
+            b->statements = NULL;
         }
-        // Note: Don't free b->block_scope here as it's managed by pop_scope()
+
+        // The scope itself is managed by pop_scope()
+        // Don't free it here as it might still be in use
+        b->block_scope = NULL; // Just clear the reference
         break;
     }
 
     default:
-        printf("DEBUG: Unknown node type %c, skipping\n", a->nodetype);
-        return; // Don't free unknown node types
+        break;
     }
 
-    printf("DEBUG: Freeing node itself\n");
     free(a);
 }
 
@@ -904,52 +885,45 @@ static struct symbol_list *reverse_symbol_list(struct symbol_list *sl)
 
 void dodef(struct symbol *name, struct symbol_list *syms, struct ast *func)
 {
+    MEM_DEBUG("Defining function %s", name->name);
+
     if (name->syms)
         symlistfree(name->syms);
     if (name->func)
         treefree(name->func);
-    name->syms = reverse_symbol_list(syms);
+
+    name->syms = syms; // Already reversed in grammar
     name->func = func;
+
+    MEM_DEBUG("Function %s defined with body at %p", name->name, (void *)func);
 }
 
 void push_function(struct symbol *func, struct scope *caller_scope)
 {
-    printf("\nDEBUG: push_function() - Starting with function '%s'\n",
-           func ? func->name : "NULL");
-    printf("DEBUG: push_function() - Caller scope: %p\n", (void *)caller_scope);
-    printf("DEBUG: push_function() - Current depth: %d\n", function_depth);
+    MEM_DEBUG("Pushing function %s with caller scope %p", func->name, (void *)caller_scope);
 
     if (function_depth >= MAX_FUNCTION_DEPTH)
     {
         error("maximum function call depth exceeded");
         return;
     }
+
     function_stack[function_depth].function = func;
     function_stack[function_depth].caller_scope = caller_scope;
     function_depth++;
 
-    printf("DEBUG: push_function() - New depth: %d\n", function_depth);
+    MEM_DEBUG("Function depth is now %d", function_depth);
 }
 
 struct function_context *pop_function(void)
 {
-    printf("\nDEBUG: pop_function() - Starting\n");
-    printf("DEBUG: pop_function() - Current depth: %d\n", function_depth);
 
     if (function_depth <= 0)
     {
-        printf("DEBUG: pop_function() - No function context to pop\n");
         return NULL;
     }
 
     function_depth--;
-    printf("DEBUG: pop_function() - Popped function, new depth: %d\n", function_depth);
-
-    if (function_depth > 0)
-    {
-        printf("DEBUG: pop_function() - Returning to caller scope: %p\n",
-               (void *)function_stack[function_depth - 1].caller_scope);
-    }
 
     return &function_stack[function_depth];
 }
@@ -1018,35 +992,64 @@ static struct value *evaluate_arguments(struct ast *args, int *count)
 
 struct value eval_function_body(struct ast *body, struct symbol *func)
 {
-    printf("\nDEBUG: eval_function_body() - Starting for function '%s'\n",
-           func ? func->name : "NULL");
-    printf("DEBUG: eval_function_body() - Current scope: %p\n",
-           (void *)current_scope);
+    MEM_DEBUG("Entering eval_function_body for function %s", func->name);
+    struct value result = {0};
 
-    struct value result;
-    struct scope *caller_scope = current_scope;
-
-    // Push function with caller's scope
-    push_function(func, caller_scope);
-
-    if (body)
+    if (!body)
     {
-        printf("DEBUG: eval_function_body() - Evaluating function body\n");
-        result = eval(body);
-        printf("DEBUG: eval_function_body() - Body evaluation complete\n");
-    }
-    else
-    {
-        printf("DEBUG: eval_function_body() - Empty body, returning default value\n");
-        /* Default return value is 0 */
+        MEM_DEBUG("Empty function body for %s", func->name);
         result.type = func->type;
         result.value.i_val = 0;
+        return result;
     }
 
-    printf("DEBUG: eval_function_body() - Popping function context\n");
-    pop_function();
+    MEM_DEBUG("Function body node type: %c", body->nodetype);
 
-    printf("DEBUG: eval_function_body() - Function execution complete\n");
+    // If the body is a block, make sure it creates a new scope
+    if (body->nodetype == 'B')
+    {
+        ((struct block *)body)->needs_scope = 1;
+    }
+
+    /* Evaluate the body */
+    result = eval(body);
+    MEM_DEBUG("Function %s evaluated with result value: ", func->name);
+    switch (result.type)
+    {
+    case TYPE_INT:
+        MEM_DEBUG("INT: %d", result.value.i_val);
+        break;
+    case TYPE_FLOAT:
+        MEM_DEBUG("FLOAT: %f", result.value.f_val);
+        break;
+    case TYPE_DOUBLE:
+        MEM_DEBUG("DOUBLE: %f", result.value.d_val);
+        break;
+    }
+
+    /* Ensure return value matches function type */
+    if (result.type != func->type)
+    {
+        MEM_DEBUG("Converting return value from type %d to function type %d",
+                  result.type, func->type);
+        struct value temp = result;
+        result.type = func->type;
+        convert_value(&result.value, result.type, &temp.value, temp.type);
+    }
+
+    MEM_DEBUG("Finished eval_function_body for %s with final value: ", func->name);
+    switch (result.type)
+    {
+    case TYPE_INT:
+        MEM_DEBUG("INT: %d", result.value.i_val);
+        break;
+    case TYPE_FLOAT:
+        MEM_DEBUG("FLOAT: %f", result.value.f_val);
+        break;
+    case TYPE_DOUBLE:
+        MEM_DEBUG("DOUBLE: %f", result.value.d_val);
+        break;
+    }
     return result;
 }
 
@@ -1054,9 +1057,18 @@ struct value eval_function_body(struct ast *body, struct symbol *func)
 /*                              Built-in Functions                            */
 /* ========================================================================== */
 
-static struct value eval_printf(const char *format, struct ast *args)
+static struct value eval_printf(struct ast *format_node, struct ast *args)
 {
     struct value result = {.type = TYPE_INT, .value.i_val = 0};
+
+    if (!format_node || format_node->nodetype != 'S')
+    {
+        error("printf requires a string literal format");
+        return result;
+    }
+
+    struct strast *fmt = (struct strast *)format_node;
+    const char *format = fmt->string;
     int chars_written = 0;
     struct ast *current_arg = args;
 
@@ -1084,6 +1096,7 @@ static struct value eval_printf(const char *format, struct ast *args)
                     chars_written += printf("%d", arg_val.value.i_val);
                 }
                 break;
+
             case 'f':
                 if (arg_val.type == TYPE_FLOAT)
                 {
@@ -1098,6 +1111,7 @@ static struct value eval_printf(const char *format, struct ast *args)
                     error("format specifier %%f requires float or double argument");
                 }
                 break;
+
             default:
                 error("unsupported format specifier %%%c", *p);
                 break;
@@ -1106,6 +1120,10 @@ static struct value eval_printf(const char *format, struct ast *args)
             if (current_arg->nodetype == 'L')
             {
                 current_arg = current_arg->r;
+            }
+            else
+            {
+                current_arg = NULL;
             }
         }
         else
@@ -1119,22 +1137,28 @@ static struct value eval_printf(const char *format, struct ast *args)
     return result;
 }
 
-static struct value eval_scanf(const char *format, struct ast *args)
+static struct value eval_scanf(struct ast *format_node, struct ast *args)
 {
     struct value result = {.type = TYPE_INT, .value.i_val = 0};
 
-    // Input validation
+    if (!format_node || format_node->nodetype != 'S')
+    {
+        error("scanf requires a string literal format");
+        return result;
+    }
+
     if (!args || args->nodetype != 'N')
     {
         error("scanf requires a variable reference");
         return result;
     }
 
+    struct strast *fmt = (struct strast *)format_node;
     struct symref *ref = (struct symref *)args;
     int items_read = 0;
 
-    switch (format[1])
-    {
+    switch (fmt->string[1])
+    { // Check format character after %
     case 'd':
         if (ref->s->type != TYPE_INT)
         {
@@ -1142,18 +1166,31 @@ static struct value eval_scanf(const char *format, struct ast *args)
         }
         else
         {
-            items_read = scanf("%d", &ref->s->value.i_val);
+            // Read the value
+            if (scanf("%d", &ref->s->value.i_val) != 1)
+            {
+                error("scanf failed to read integer");
+            }
+            items_read = 1;
         }
         break;
 
     case 'f':
         if (ref->s->type == TYPE_FLOAT)
         {
-            items_read = scanf("%f", &ref->s->value.f_val);
+            if (scanf("%f", &ref->s->value.f_val) != 1)
+            {
+                error("scanf failed to read float");
+            }
+            items_read = 1;
         }
         else if (ref->s->type == TYPE_DOUBLE)
         {
-            items_read = scanf("%lf", &ref->s->value.d_val);
+            if (scanf("%lf", &ref->s->value.d_val) != 1)
+            {
+                error("scanf failed to read double");
+            }
+            items_read = 1;
         }
         else
         {
@@ -1166,10 +1203,15 @@ static struct value eval_scanf(const char *format, struct ast *args)
         break;
     }
 
-    // Clear input buffer
-    int c;
+    // Read and discard any remaining characters up to and including newline
+    char c;
     while ((c = getchar()) != '\n' && c != EOF)
-        ;
+    {
+        // Discard the character
+    }
+
+    // Reset any error indicators on stdin
+    clearerr(stdin);
 
     result.value.i_val = items_read;
     return result;
@@ -1184,18 +1226,13 @@ struct value eval(struct ast *a)
     struct scope *entry_scope = current_scope;
     struct value v1, v2, result = {0};
 
-    printf("\nDEBUG: eval() - Entering with scope %p\n", (void *)current_scope);
-
     if (!a)
     {
-        printf("DEBUG: eval() - null AST node\n");
         error("internal error, null eval");
         result.type = TYPE_INT;
         result.value.i_val = 0;
         return result;
     }
-
-    printf("DEBUG: eval() - Processing node type '%c'\n", a->nodetype);
 
     switch (a->nodetype)
     {
@@ -1212,6 +1249,9 @@ struct value eval(struct ast *a)
     /* return statement */
     case 'R':
     {
+        MEM_DEBUG("Processing return statement");
+        struct function_context *ctx = current_function();
+
         if (!current_function_sym)
         {
             error("return statement outside of function");
@@ -1223,42 +1263,39 @@ struct value eval(struct ast *a)
         if (a->l)
         {
             result = eval(a->l);
-            /* Convert to function's return type if needed */
-            if (result.type != current_function_sym->type)
+            MEM_DEBUG("Return statement evaluated expression with result: ");
+            MEM_DEBUG("INT: %d", result.value.i_val);
+
+            if (ctx)
             {
-                struct value temp = result;
-                result.type = current_function_sym->type;
-                convert_value(&result.value, result.type, &temp.value, temp.type);
+                ctx->has_returned = 1;
+                ctx->return_value = result;
             }
         }
         else
         {
             result.type = current_function_sym->type;
             result.value.i_val = 0;
+            MEM_DEBUG("Empty return statement, returning 0");
+
+            if (ctx)
+            {
+                ctx->has_returned = 1;
+                ctx->return_value = result;
+            }
         }
+
         return result;
     }
 
     /* declaration */
     case 'D':
     {
-        printf("DEBUG: eval() - Processing declaration in scope %p\n", (void *)current_scope);
         struct symbol *s = (struct symbol *)a->l;
-        printf("DEBUG: eval() - Declaring symbol '%s' of type %d\n", s->name, s->type);
+        init_symbol(s); // Initialize the symbol
 
         result.type = s->type;
-        switch (s->type)
-        {
-        case TYPE_INT:
-            result.value.i_val = 0;
-            break;
-        case TYPE_FLOAT:
-            result.value.f_val = 0.0f;
-            break;
-        case TYPE_DOUBLE:
-            result.value.d_val = 0.0;
-            break;
-        }
+        result.value = s->value; // Copy initialized value
         break;
     }
 
@@ -1275,7 +1312,6 @@ struct value eval(struct ast *a)
     case 'N':
     {
         struct symref *s = (struct symref *)a;
-        printf("DEBUG: eval() - Variable reference to '%s'\n", s->s->name);
 
         struct symbol *sym = lookup_all_scopes(s->s->name);
         if (!sym)
@@ -1286,8 +1322,6 @@ struct value eval(struct ast *a)
 
         result.type = sym->type;
         result.value = sym->value;
-        printf("DEBUG: eval() - Found value for '%s' in scope %p\n",
-               sym->name, (void *)current_scope);
         break;
     }
 
@@ -1295,13 +1329,11 @@ struct value eval(struct ast *a)
     case '=':
     {
         struct symasgn *sa = (struct symasgn *)a;
-        printf("\nDEBUG: eval() - Assignment to '%s'\n", sa->s->name);
-        printf("DEBUG: eval() - Current scope during assignment: %p\n", (void *)current_scope);
 
         // Evaluate right-hand side first
         struct value rhs = eval(sa->v);
 
-        // Look up the symbol in all accessible scopes
+        // For assignments, we want the innermost matching symbol
         struct symbol *sym = lookup_all_scopes(sa->s->name);
         if (!sym)
         {
@@ -1318,8 +1350,6 @@ struct value eval(struct ast *a)
 
         // Store the converted value
         sym->value = target_val.value;
-        printf("DEBUG: eval() - Successfully assigned to '%s' in scope %p\n",
-               sym->name, (void *)current_scope);
 
         // Assignment expression returns the original (unconverted) value
         result = rhs;
@@ -1334,6 +1364,24 @@ struct value eval(struct ast *a)
     {
         v1 = eval(a->l);
         v2 = eval(a->r);
+
+        // Debug the values before operation
+        switch (v1.type)
+        {
+        case TYPE_INT:
+            break;
+        case TYPE_FLOAT:
+        case TYPE_DOUBLE:
+            break;
+        }
+        switch (v2.type)
+        {
+        case TYPE_INT:
+            break;
+        case TYPE_FLOAT:
+        case TYPE_DOUBLE:
+            break;
+        }
 
         // Determine result type and convert operands
         result.type = promote_types(v1.type, v2.type);
@@ -1473,33 +1521,44 @@ struct value eval(struct ast *a)
             return result;
         }
 
-        char *format = NULL;
-        struct ast *args = NULL;
-
-        if (f->l->nodetype == 'S')
+        // First argument must be a string node
+        if (f->l->nodetype != 'S' &&
+            (f->l->nodetype != 'L' || f->l->l->nodetype != 'S'))
         {
-            format = ((struct strval *)f->l)->str;
-        }
-        else if (f->l->nodetype == 'L' && f->l->l->nodetype == 'S')
-        {
-            format = ((struct strval *)f->l->l)->str;
-            args = f->l->r;
-        }
-        else
-        {
-            error("Invalid arguments to built-in function");
+            error("First argument to built-in function must be a string literal");
             result.type = TYPE_INT;
             result.value.i_val = 0;
             return result;
         }
 
+        struct ast *format_node;
+        struct ast *args = NULL;
+
+        if (f->l->nodetype == 'L')
+        {
+            format_node = f->l->l;
+            args = f->l->r;
+        }
+        else
+        {
+            format_node = f->l;
+        }
+
         switch (f->functype)
         {
         case B_printf:
-            return eval_printf(format, args);
+            return eval_printf(format_node, args);
         case B_scanf:
-            return eval_scanf(format, args);
+            return eval_scanf(format_node, args);
         }
+        return result;
+    }
+
+    case 'S':
+    {
+        struct strast *s = (struct strast *)a;
+        result.type = TYPE_INT;
+        result.value.i_val = 0;
         return result;
     }
 
@@ -1609,6 +1668,7 @@ struct value eval(struct ast *a)
     case 'I':
     {
         v1 = eval(((struct flow *)a)->cond);
+
         if (v1.value.i_val != 0)
         {
             if (((struct flow *)a)->tl)
@@ -1640,11 +1700,24 @@ struct value eval(struct ast *a)
     {
         result.type = TYPE_INT;
         result.value.i_val = 0;
+
         if (((struct flow *)a)->tl)
         {
-            while ((v1 = eval(((struct flow *)a)->cond)).value.i_val)
+            while (1)
             {
+                v1 = eval(((struct flow *)a)->cond);
+
+                if (!v1.value.i_val)
+                    break;
+
                 result = eval(((struct flow *)a)->tl);
+
+                // Verify scope is still valid
+                if (!current_scope)
+                {
+                    error("Lost scope in while loop");
+                    return result;
+                }
             }
         }
         return result;
@@ -1654,31 +1727,56 @@ struct value eval(struct ast *a)
     case 'B':
     {
         struct block *b = (struct block *)a;
-        printf("\nDEBUG: eval() - Block evaluation starting\n");
-        printf("DEBUG: eval() - Current scope before block: %p\n", (void *)current_scope);
-        printf("DEBUG: eval() - Block scope: %p\n", (void *)b->block_scope);
+        struct scope *new_scope = NULL;
+        struct scope *saved_scope = current_scope;
+        struct function_context *ctx = current_function();
+        struct value block_result = {0};
 
-        // Evaluate the block's statements in the block's scope
+        MEM_DEBUG("Evaluating block (original scope: %p)", (void *)b->block_scope);
+
+        if (b->needs_scope)
+        {
+            MEM_DEBUG("Creating new scope for block execution");
+            new_scope = push_scope();
+            if (!new_scope)
+            {
+                error("Failed to create new scope for block");
+                return result;
+            }
+            current_scope = new_scope;
+        }
+
+        // Evaluate statements
         if (b->statements)
         {
-            result = eval(b->statements);
+            MEM_DEBUG("Evaluating block statements, node type: %c", b->statements->nodetype);
+            block_result = eval(b->statements);
+
+            // If we've seen a return, propagate it
+            if (ctx && ctx->has_returned)
+            {
+                result = ctx->return_value;
+                MEM_DEBUG("Block propagating return value: %d", result.value.i_val);
+            }
+            else
+            {
+                result = block_result;
+            }
         }
         else
         {
-            // Empty block returns 0
+            MEM_DEBUG("Empty block");
             result.type = TYPE_INT;
             result.value.i_val = 0;
         }
 
-        // Pop the block's scope and record the parent scope
-        printf("DEBUG: eval() - Block evaluation complete, popping scope %p\n",
-               (void *)b->block_scope);
-
-        struct scope *parent_scope = b->block_scope->parent;
-        pop_scope();
-
-        printf("DEBUG: eval() - Restored to parent scope %p\n", (void *)parent_scope);
-        current_scope = parent_scope;
+        // Restore scope
+        if (new_scope)
+        {
+            MEM_DEBUG("Cleaning up block execution scope");
+            pop_scope();
+        }
+        current_scope = saved_scope;
 
         return result;
     }
@@ -1686,27 +1784,34 @@ struct value eval(struct ast *a)
     /* sequential execution */
     case 'L':
     {
-        printf("DEBUG: eval() - Sequential execution block\n");
-        printf("DEBUG: eval() - Current scope before left eval: %p\n", (void *)current_scope);
-
         struct scope *save_scope = current_scope;
+        struct function_context *ctx = current_function();
 
+        // Evaluate left side
         if (a->l)
         {
             result = eval(a->l);
-            current_scope = save_scope; // Restore after left evaluation
+            // If we hit a return, stop evaluation
+            if (ctx && ctx->has_returned)
+            {
+                MEM_DEBUG("List propagating return from left side: %d", result.value.i_val);
+                return result;
+            }
         }
 
-        printf("DEBUG: eval() - Current scope between L/R eval: %p\n", (void *)current_scope);
-
-        if (a->r)
+        // Evaluate right side
+        if (a->r && (!ctx || !ctx->has_returned))
         {
             result = eval(a->r);
-            current_scope = save_scope; // Restore after right evaluation
+            // Handle returns from right side
+            if (ctx && ctx->has_returned)
+            {
+                MEM_DEBUG("List propagating return from right side: %d", result.value.i_val);
+            }
         }
 
-        printf("DEBUG: eval() - Current scope after right eval: %p\n", (void *)current_scope);
-        break;
+        current_scope = save_scope;
+        return result;
     }
 
     /* user function calls */
@@ -1715,10 +1820,9 @@ struct value eval(struct ast *a)
         struct ufncall *f = (struct ufncall *)a;
         struct scope *save_scope = current_scope;
         struct symbol *save_function = current_function_sym;
+        struct value call_result = {0};
 
-        printf("\nDEBUG: eval() - Function call to '%s'\n", f->s->name);
-        printf("DEBUG: eval() - Current scope before call: %p\n", (void *)current_scope);
-        printf("DEBUG: eval() - Current function depth: %d\n", function_depth);
+        MEM_DEBUG("Function call to %s", f->s->name);
 
         if (!f->s->func)
         {
@@ -1729,31 +1833,45 @@ struct value eval(struct ast *a)
         }
 
         /* Create new scope for function */
-        printf("DEBUG: eval() - Creating new scope for function\n");
         push_scope();
         struct scope *function_scope = current_scope;
         current_function_sym = f->s;
 
-        /* Save the caller's scope */
-        printf("DEBUG: eval() - Saving caller's scope %p\n", (void *)save_scope);
-        push_function(f->s, save_scope);
+        MEM_DEBUG("Created new scope %p for function %s",
+                  (void *)function_scope, f->s->name);
 
         /* Evaluate arguments in caller's scope */
-        printf("DEBUG: eval() - Switching to caller's scope for argument evaluation\n");
         current_scope = save_scope;
         int arg_count = 0;
         struct value *args = evaluate_arguments(f->l, &arg_count);
-        printf("DEBUG: eval() - Evaluated %d arguments in caller's scope\n", arg_count);
 
         /* Switch back to function scope for parameter binding */
-        printf("DEBUG: eval() - Switching back to function scope %p\n", (void *)function_scope);
         current_scope = function_scope;
 
+        /* Count parameters */
+        struct symbol_list *sl = f->s->syms;
+        int param_count = 0;
+        struct symbol_list *temp = sl;
+        while (temp)
+        {
+            param_count++;
+            temp = temp->next;
+        }
+
+        MEM_DEBUG("Binding %d arguments to parameters", arg_count);
+
+        if (arg_count != param_count)
+        {
+            error("argument count mismatch: expected %d, got %d",
+                  param_count, arg_count);
+        }
+
         /* Bind parameters to function scope */
-        struct symbol_list *sl = f->s->syms; // Original parameter list from function def
+        sl = f->s->syms; // Reset to start of parameter list
         for (int i = 0; i < arg_count && sl; i++)
         {
-            printf("DEBUG: eval() - Binding parameter '%s'\n", sl->sym->name);
+            MEM_DEBUG("Binding parameter %d (%s) with value: %d",
+                      i, sl->sym->name, args[i].value.i_val);
 
             struct symbol *param = malloc(sizeof(struct symbol));
             if (!param)
@@ -1762,23 +1880,24 @@ struct value eval(struct ast *a)
                 exit(0);
             }
 
-            /* Use original parameter name from function definition */
-            param->name = strdup(sl->sym->name); // Important: use original name
+            param->name = strdup(sl->sym->name);
             param->type = sl->sym->type;
+            param->func = NULL;
+            param->syms = NULL;
 
-            /* Convert argument value to parameter type */
+            /* Initialize with argument value */
             convert_value(&param->value, param->type, &args[i].value, args[i].type);
-
-            printf("DEBUG: eval() - Created parameter symbol '%s' with type %d\n",
-                   param->name, param->type);
 
             /* Add parameter to function scope */
             struct symbol_table *st = malloc(sizeof(struct symbol_table));
             if (!st)
             {
+                free(param->name);
+                free(param);
                 error("out of space");
                 exit(0);
             }
+
             st->sym = param;
             st->next = current_scope->symbols;
             current_scope->symbols = st;
@@ -1791,35 +1910,49 @@ struct value eval(struct ast *a)
             free(args);
         }
 
-        /* Evaluate function body */
-        printf("DEBUG: eval() - Starting function body evaluation\n");
-        result = eval(f->s->func);
-        printf("DEBUG: eval() - Completed function body evaluation\n");
+        /* Create new function context and push it */
+        struct function_context *new_ctx = &function_stack[function_depth];
+        new_ctx->function = f->s;
+        new_ctx->caller_scope = save_scope;
+        new_ctx->has_returned = 0;
+        memset(&new_ctx->return_value, 0, sizeof(struct value));
+
+        push_function(f->s, save_scope);
+
+        /* Execute function body */
+        call_result = eval(f->s->func);
+
+        /* Get final result */
+        struct function_context *ctx = current_function();
+        if (ctx && ctx->has_returned)
+        {
+            result = ctx->return_value;
+            MEM_DEBUG("Using function's explicit return value: %d", result.value.i_val);
+        }
+        else
+        {
+            result = call_result;
+            MEM_DEBUG("Using function's default return value: %d", result.value.i_val);
+        }
+
+        MEM_DEBUG("Function %s evaluated with result: %d",
+                  f->s->name, result.value.i_val);
 
         /* Restore state */
-        printf("DEBUG: eval() - Cleaning up function call state\n");
-        printf("DEBUG: eval() - Popping function scope %p\n", (void *)current_scope);
-        pop_scope();
         pop_function();
-
-        printf("DEBUG: eval() - Restoring caller scope %p\n", (void *)save_scope);
+        pop_scope();
         current_scope = save_scope;
         current_function_sym = save_function;
 
-        printf("DEBUG: eval() - Function call complete, returned to scope %p\n",
-               (void *)current_scope);
         return result;
     }
 
     default:
-        printf("DEBUG: eval() - Unhandled node type '%c'\n", a->nodetype);
         result.type = TYPE_INT;
         result.value.i_val = 0;
         break;
     }
 
-    printf("DEBUG: eval() - Restoring scope from %p to %p\n",
-           (void *)current_scope, (void *)entry_scope);
     current_scope = entry_scope;
     return result;
 }
@@ -1843,7 +1976,6 @@ void error(char *s, ...)
 
 void cleanup_and_exit(int status)
 {
-    printf("DEBUG: Starting cleanup\n");
 
     // Only clean up if we're not already in an error state
     if (!error_state)
@@ -1851,7 +1983,6 @@ void cleanup_and_exit(int status)
         // Clean up root AST if it exists
         if (root)
         {
-            printf("DEBUG: Cleaning up root AST\n");
             treefree(root);
             root = NULL;
         }
@@ -1859,7 +1990,6 @@ void cleanup_and_exit(int status)
         // Clean up all scopes
         while (current_scope)
         {
-            printf("DEBUG: Cleaning up scope %p\n", (void *)current_scope);
             struct scope *old = current_scope;
             current_scope = current_scope->parent;
 
@@ -1886,7 +2016,6 @@ void cleanup_and_exit(int status)
         }
     }
 
-    printf("DEBUG: Cleanup complete, exiting with status %d\n", status);
     exit(status);
 }
 
@@ -2024,6 +2153,15 @@ void dumpast(struct ast *a, int level)
         dumpast(a->l, level);
         return;
 
+    case 'S':
+    {
+        struct strast *s = (struct strast *)a;
+        printf("string \"%s\"\n", s->string);
+        if (s->next)
+            dumpast(s->next, level);
+        return;
+    }
+
     case 'C':
         printf("call %s\n", ((struct ufncall *)a)->s->name);
         dumpast(a->l, level);
@@ -2042,10 +2180,14 @@ void dumpast(struct ast *a, int level)
 char *process_string_literal(char *str)
 {
     char *processed = malloc(strlen(str) + 1);
-    char *out = processed;
+    if (!processed)
+    {
+        error("out of memory");
+        return NULL;
+    }
 
-    // Skip opening quote
-    str++;
+    char *out = processed;
+    str++; // Skip opening quote
 
     while (*str && str[0] != '"')
     {
@@ -2084,23 +2226,8 @@ char *process_string_literal(char *str)
         }
     }
     *out = '\0';
+
     return processed;
-}
-
-/* ========================================================================== */
-/*                              Symbol List Management                        */
-/* ========================================================================== */
-
-void symlistfree(struct symbol_list *sl)
-{
-    struct symbol_list *nsl;
-
-    while (sl)
-    {
-        nsl = sl->next;
-        free(sl);
-        sl = nsl;
-    }
 }
 
 /* ========================================================================== */
@@ -2109,37 +2236,53 @@ void symlistfree(struct symbol_list *sl)
 
 void init_scope_system(void)
 {
-    printf("\nDEBUG: Initializing scope system\n");
     current_scope = NULL;
     current_type = NO_TYPE;
     struct scope *global_scope = push_scope();
-    printf("DEBUG: Created global scope at %p\n", (void *)global_scope);
-    debug_print_symbol_table("Initial symbol table state");
 }
 
 int run_script(const char *filename)
 {
-    FILE *prev_yyin = yyin; // Save current input
-    yyin = fopen(filename, "r");
+    printf("Running script: %s\n", filename);
 
+    // Store previous input file
+    FILE *prev_yyin = yyin;
+
+    // Try to open the new file
+    yyin = fopen(filename, "r");
     if (!yyin)
     {
-        return 1; // Error opening file
+        printf("Error: Could not open file %s\n", filename);
+        return 1;
     }
 
-    // Save interactive mode state and temporarily disable it
+    // Save interactive mode state
     int prev_interactive = interactive_mode;
     interactive_mode = 0;
+
+    // Reset lexer state for new file
+    yyrestart(yyin);
 
     // Parse the file
     int result = yyparse();
 
-    // Restore previous state
+    // Only treat as error if it's not EOF
+    if (result != 0 && !feof(yyin))
+    {
+        printf("Error parsing file %s\n", filename);
+        fclose(yyin);
+        yyin = prev_yyin;
+        interactive_mode = prev_interactive;
+        return 1;
+    }
+
+    // Clean up and restore previous state
     fclose(yyin);
     yyin = prev_yyin;
+    yyrestart(yyin);
     interactive_mode = prev_interactive;
 
-    return result;
+    return 0;
 }
 
 int main(void)

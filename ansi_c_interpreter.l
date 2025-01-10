@@ -99,10 +99,28 @@ IS          ((u|U)|(u|U)?(l|L|ll|LL)|(l|L|ll|LL)(u|U))
     /* String Literals */
 L?\"(\\.|[^\\"\n])*\"     { 
     count();
-    char *processed = process_string_literal(yytext);
-    struct format_string *fs = malloc(sizeof(struct format_string));
-    fs->str = processed;
-    yylval.format_str = fs;
+    char *text_copy = strdup(yytext);
+    if (!text_copy) {
+        error("out of memory");
+        exit(0);
+    }
+    
+    char *processed = process_string_literal(text_copy);
+    free(text_copy);
+    
+    if (!processed) {
+        error("string processing failed");
+        exit(0);
+    }
+    
+    struct strast *s = (struct strast *)newstrast(processed);
+    if (!s) {
+        free(processed);
+        error("out of memory");
+        exit(0);
+    }
+    
+    yylval.a = (struct ast *)s;
     return STRING_LITERAL; 
 }
 
@@ -127,8 +145,18 @@ L?\"(\\.|[^\\"\n])*\"     {
 "<"             { count(); return('<'); }
 ">"             { count(); return('>'); }
 
+    /* EOF handling */
+<<EOF>> {
+    if (!interactive_mode) {
+        yyterminate();
+    }
+    return 0;
+}
+
+
     /* Whitespace */
-[ \t\v\n\f]     { count(); }
+[\n\r]          { count(); }
+[ \t\v\f]       { count(); }
 
     /* Unmatched Characters */
 .               { /* Add code to complain about unmatched characters */ }
@@ -153,16 +181,18 @@ void comment(void) {
 /* Track column position for error reporting */
 void count(void) {
     int i;
-
+    
     for (i = 0; yytext[i] != '\0'; i++) {
-        if (yytext[i] == '\n')
+        if (yytext[i] == '\n' || yytext[i] == '\r') {
             column = 0;
-        else if (yytext[i] == '\t')
+        } else if (yytext[i] == '\t') {
             column += 8 - (column % 8);
-        else
+        } else {
             column++;
+        }
     }
 }
+
 
 /* Symbol lookup helper */
 int check_type(void) {
