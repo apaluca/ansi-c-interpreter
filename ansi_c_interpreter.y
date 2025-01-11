@@ -252,22 +252,16 @@ statement
 
 compound_statement
     : '{' {
-        MEM_DEBUG("Starting new compound statement");
         struct scope *new_scope = push_scope();
-        MEM_DEBUG("Created new scope %p for compound statement", (void*)new_scope);
-    } block_item_list '}'
+        } block_item_list '}'
     {
-        MEM_DEBUG("Creating block for compound statement");
         struct ast *block = newblock($3, current_scope);
         $$ = block;
     }
     | '{' {
-        MEM_DEBUG("Starting empty compound statement");
         struct scope *new_scope = push_scope();
-        MEM_DEBUG("Created new scope %p for empty compound statement", (void*)new_scope);
-    } '}'
+        } '}'
     {
-        MEM_DEBUG("Creating empty block");
         $$ = newblock(NULL, current_scope);
     }
     ;

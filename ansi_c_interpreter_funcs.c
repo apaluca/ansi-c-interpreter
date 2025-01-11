@@ -49,13 +49,8 @@ void pop_scope(void)
 {
     if (!current_scope)
     {
-        MEM_DEBUG("Warning: Attempting to pop null scope");
         return;
     }
-
-    MEM_DEBUG("Popping scope %p (parent: %p)",
-              (void *)current_scope,
-              (void *)(current_scope->parent));
 
     struct scope *scope_to_pop = current_scope;
     struct scope *parent_scope = current_scope->parent;
@@ -69,9 +64,6 @@ void pop_scope(void)
             // Don't free function definitions or their symbols
             if (!st->sym->func)
             {
-                MEM_DEBUG("Freeing symbol %s in scope %p",
-                          st->sym->name ? st->sym->name : "(unnamed)",
-                          (void *)scope_to_pop);
                 if (st->sym->name)
                     free(st->sym->name);
                 if (st->sym->syms)
@@ -80,8 +72,7 @@ void pop_scope(void)
             }
             else
             {
-                MEM_DEBUG("Preserving function symbol %s", st->sym->name);
-            }
+                }
         }
         struct symbol_table *next = st->next;
         free(st);
@@ -117,15 +108,12 @@ struct symbol *scope_lookup(char *name)
 
 struct symbol *lookup_all_scopes(char *name)
 {
-    MEM_DEBUG("Looking up symbol %s in all scopes", name);
-
     // For declarations, only look in current scope
     if (current_type != NO_TYPE)
     {
         struct symbol *current = scope_lookup(name);
         if (current)
         {
-            MEM_DEBUG("Found %s in current scope during declaration", name);
             return current;
         }
         return NULL;
@@ -138,7 +126,6 @@ struct symbol *lookup_all_scopes(char *name)
 
     while (s)
     {
-        MEM_DEBUG("Searching scope %p for %s", (void *)s, name);
         struct symbol_table *st = s->symbols;
         while (st)
         {
@@ -147,11 +134,9 @@ struct symbol *lookup_all_scopes(char *name)
                 if (!innermost)
                 {
                     innermost = st->sym;
-                    MEM_DEBUG("Found innermost definition of %s", name);
-                }
+                    }
                 outermost = st->sym;
-                MEM_DEBUG("Found outermost definition of %s", name);
-            }
+                }
             st = st->next;
         }
         s = s->parent;
@@ -160,18 +145,15 @@ struct symbol *lookup_all_scopes(char *name)
     // If this is an assignment target, use the innermost (shadowed) version
     if (current_scope && scope_lookup(name))
     {
-        MEM_DEBUG("Returning innermost definition of %s for assignment", name);
         return innermost;
     }
 
     // For expressions, use the outermost version
     if (outermost)
     {
-        MEM_DEBUG("Returning outermost definition of %s for expression", name);
         return outermost;
     }
 
-    MEM_DEBUG("Symbol %s not found in any scope", name);
     return NULL;
 }
 
@@ -581,7 +563,6 @@ struct ast *newcmp(int cmptype, struct ast *l, struct ast *r)
 
 struct ast *newblock(struct ast *statements, struct scope *scope)
 {
-    MEM_DEBUG("Creating new block with original scope %p", (void *)scope);
     struct block *b = malloc(sizeof(struct block));
     if (!b)
     {
@@ -603,7 +584,6 @@ struct ast *newblock(struct ast *statements, struct scope *scope)
         ((struct ast *)b)->result_type = TYPE_INT;
     }
 
-    MEM_DEBUG("Block created with statements at %p", (void *)statements);
     return (struct ast *)b;
 }
 
@@ -885,8 +865,6 @@ static struct symbol_list *reverse_symbol_list(struct symbol_list *sl)
 
 void dodef(struct symbol *name, struct symbol_list *syms, struct ast *func)
 {
-    MEM_DEBUG("Defining function %s", name->name);
-
     if (name->syms)
         symlistfree(name->syms);
     if (name->func)
@@ -895,13 +873,10 @@ void dodef(struct symbol *name, struct symbol_list *syms, struct ast *func)
     name->syms = syms; // Already reversed in grammar
     name->func = func;
 
-    MEM_DEBUG("Function %s defined with body at %p", name->name, (void *)func);
-}
+    }
 
 void push_function(struct symbol *func, struct scope *caller_scope)
 {
-    MEM_DEBUG("Pushing function %s with caller scope %p", func->name, (void *)caller_scope);
-
     if (function_depth >= MAX_FUNCTION_DEPTH)
     {
         error("maximum function call depth exceeded");
@@ -912,8 +887,7 @@ void push_function(struct symbol *func, struct scope *caller_scope)
     function_stack[function_depth].caller_scope = caller_scope;
     function_depth++;
 
-    MEM_DEBUG("Function depth is now %d", function_depth);
-}
+    }
 
 struct function_context *pop_function(void)
 {
@@ -992,18 +966,14 @@ static struct value *evaluate_arguments(struct ast *args, int *count)
 
 struct value eval_function_body(struct ast *body, struct symbol *func)
 {
-    MEM_DEBUG("Entering eval_function_body for function %s", func->name);
     struct value result = {0};
 
     if (!body)
     {
-        MEM_DEBUG("Empty function body for %s", func->name);
         result.type = func->type;
         result.value.i_val = 0;
         return result;
     }
-
-    MEM_DEBUG("Function body node type: %c", body->nodetype);
 
     // If the body is a block, make sure it creates a new scope
     if (body->nodetype == 'B')
@@ -1013,41 +983,31 @@ struct value eval_function_body(struct ast *body, struct symbol *func)
 
     /* Evaluate the body */
     result = eval(body);
-    MEM_DEBUG("Function %s evaluated with result value: ", func->name);
     switch (result.type)
     {
     case TYPE_INT:
-        MEM_DEBUG("INT: %d", result.value.i_val);
         break;
     case TYPE_FLOAT:
-        MEM_DEBUG("FLOAT: %f", result.value.f_val);
         break;
     case TYPE_DOUBLE:
-        MEM_DEBUG("DOUBLE: %f", result.value.d_val);
         break;
     }
 
     /* Ensure return value matches function type */
     if (result.type != func->type)
     {
-        MEM_DEBUG("Converting return value from type %d to function type %d",
-                  result.type, func->type);
         struct value temp = result;
         result.type = func->type;
         convert_value(&result.value, result.type, &temp.value, temp.type);
     }
 
-    MEM_DEBUG("Finished eval_function_body for %s with final value: ", func->name);
     switch (result.type)
     {
     case TYPE_INT:
-        MEM_DEBUG("INT: %d", result.value.i_val);
         break;
     case TYPE_FLOAT:
-        MEM_DEBUG("FLOAT: %f", result.value.f_val);
         break;
     case TYPE_DOUBLE:
-        MEM_DEBUG("DOUBLE: %f", result.value.d_val);
         break;
     }
     return result;
@@ -1249,7 +1209,6 @@ struct value eval(struct ast *a)
     /* return statement */
     case 'R':
     {
-        MEM_DEBUG("Processing return statement");
         struct function_context *ctx = current_function();
 
         if (!current_function_sym)
@@ -1263,9 +1222,6 @@ struct value eval(struct ast *a)
         if (a->l)
         {
             result = eval(a->l);
-            MEM_DEBUG("Return statement evaluated expression with result: ");
-            MEM_DEBUG("INT: %d", result.value.i_val);
-
             if (ctx)
             {
                 ctx->has_returned = 1;
@@ -1276,8 +1232,6 @@ struct value eval(struct ast *a)
         {
             result.type = current_function_sym->type;
             result.value.i_val = 0;
-            MEM_DEBUG("Empty return statement, returning 0");
-
             if (ctx)
             {
                 ctx->has_returned = 1;
@@ -1732,11 +1686,8 @@ struct value eval(struct ast *a)
         struct function_context *ctx = current_function();
         struct value block_result = {0};
 
-        MEM_DEBUG("Evaluating block (original scope: %p)", (void *)b->block_scope);
-
         if (b->needs_scope)
         {
-            MEM_DEBUG("Creating new scope for block execution");
             new_scope = push_scope();
             if (!new_scope)
             {
@@ -1749,15 +1700,13 @@ struct value eval(struct ast *a)
         // Evaluate statements
         if (b->statements)
         {
-            MEM_DEBUG("Evaluating block statements, node type: %c", b->statements->nodetype);
             block_result = eval(b->statements);
 
             // If we've seen a return, propagate it
             if (ctx && ctx->has_returned)
             {
                 result = ctx->return_value;
-                MEM_DEBUG("Block propagating return value: %d", result.value.i_val);
-            }
+                }
             else
             {
                 result = block_result;
@@ -1765,7 +1714,6 @@ struct value eval(struct ast *a)
         }
         else
         {
-            MEM_DEBUG("Empty block");
             result.type = TYPE_INT;
             result.value.i_val = 0;
         }
@@ -1773,7 +1721,6 @@ struct value eval(struct ast *a)
         // Restore scope
         if (new_scope)
         {
-            MEM_DEBUG("Cleaning up block execution scope");
             pop_scope();
         }
         current_scope = saved_scope;
@@ -1794,7 +1741,6 @@ struct value eval(struct ast *a)
             // If we hit a return, stop evaluation
             if (ctx && ctx->has_returned)
             {
-                MEM_DEBUG("List propagating return from left side: %d", result.value.i_val);
                 return result;
             }
         }
@@ -1806,8 +1752,7 @@ struct value eval(struct ast *a)
             // Handle returns from right side
             if (ctx && ctx->has_returned)
             {
-                MEM_DEBUG("List propagating return from right side: %d", result.value.i_val);
-            }
+                }
         }
 
         current_scope = save_scope;
@@ -1822,8 +1767,6 @@ struct value eval(struct ast *a)
         struct symbol *save_function = current_function_sym;
         struct value call_result = {0};
 
-        MEM_DEBUG("Function call to %s", f->s->name);
-
         if (!f->s->func)
         {
             error("call to undefined function %s", f->s->name);
@@ -1836,9 +1779,6 @@ struct value eval(struct ast *a)
         push_scope();
         struct scope *function_scope = current_scope;
         current_function_sym = f->s;
-
-        MEM_DEBUG("Created new scope %p for function %s",
-                  (void *)function_scope, f->s->name);
 
         /* Evaluate arguments in caller's scope */
         current_scope = save_scope;
@@ -1858,8 +1798,6 @@ struct value eval(struct ast *a)
             temp = temp->next;
         }
 
-        MEM_DEBUG("Binding %d arguments to parameters", arg_count);
-
         if (arg_count != param_count)
         {
             error("argument count mismatch: expected %d, got %d",
@@ -1870,9 +1808,6 @@ struct value eval(struct ast *a)
         sl = f->s->syms; // Reset to start of parameter list
         for (int i = 0; i < arg_count && sl; i++)
         {
-            MEM_DEBUG("Binding parameter %d (%s) with value: %d",
-                      i, sl->sym->name, args[i].value.i_val);
-
             struct symbol *param = malloc(sizeof(struct symbol));
             if (!param)
             {
@@ -1927,16 +1862,11 @@ struct value eval(struct ast *a)
         if (ctx && ctx->has_returned)
         {
             result = ctx->return_value;
-            MEM_DEBUG("Using function's explicit return value: %d", result.value.i_val);
-        }
+            }
         else
         {
             result = call_result;
-            MEM_DEBUG("Using function's default return value: %d", result.value.i_val);
-        }
-
-        MEM_DEBUG("Function %s evaluated with result: %d",
-                  f->s->name, result.value.i_val);
+            }
 
         /* Restore state */
         pop_function();
