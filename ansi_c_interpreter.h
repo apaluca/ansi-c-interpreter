@@ -285,20 +285,6 @@ int run_script(const char *filename);
 /*                                    DEBUG                                   */
 /* ========================================================================== */
 
-void print_scope_chain(const char *prefix);
-
-//#define SCOPE_CHAIN_PRINT 1
-
-#ifdef SCOPE_CHAIN_PRINT
-#define PRINT_SCOPE_CHAIN(prefix)     \
-    do                                \
-    {                                 \
-        print_scope_chain(prefix);    \
-    } while (0)
-#else
-#define PRINT_SCOPE_CHAIN(prefix)
-#endif
-
 //#define DEBUG 1
 
 #ifdef DEBUG

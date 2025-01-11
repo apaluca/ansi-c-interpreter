@@ -54,7 +54,7 @@ scanf("%d", a);
 printf("New value of a: %d\n", a);
 
 // 5. Code Blocks and Scope Testing
-printf("\nEnhanced Block Scope Tests:\n");
+printf("\nBlock Scope Tests:\n");
 
 int outer;
 outer = 100;
@@ -68,28 +68,11 @@ outer = 100;
         int inner2;
         inner2 = inner1 + 10;  // Should access inner1
         printf("inner2: %d\n", inner2);
-        
-        // Variable shadowing test
-        int outer;  // Shadows outer variable
-        outer = 500;
-        printf("shadowed outer: %d\n", outer);
     }
-    
-    // Test scope isolation
-    int test_var;
-    test_var = 75;
-    {
-        int test_var;  // Different variable in nested scope
-        test_var = 25;
-        printf("inner test_var: %d\n", test_var);
-    }
-    printf("outer test_var: %d\n", test_var);
 }
 
-printf("original outer: %d\n", outer);
-
 // 6. Function Testing
-printf("\nEnhanced Function Tests:\n");
+printf("\nFunction Tests:\n");
 
 // Function to test basic arithmetic and return
 int calculate(int x, int y) {

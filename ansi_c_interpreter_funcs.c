@@ -40,8 +40,6 @@ struct scope *push_scope(void)
     new_scope->parent = current_scope;
     current_scope = new_scope;
 
-    PRINT_SCOPE_CHAIN("After Push");
-
     return new_scope;
 }
 
@@ -70,9 +68,6 @@ void pop_scope(void)
                     symlistfree(st->sym->syms);
                 free(st->sym);
             }
-            else
-            {
-                }
         }
         struct symbol_table *next = st->next;
         free(st);
@@ -82,8 +77,6 @@ void pop_scope(void)
     // Now free the scope itself
     current_scope = parent_scope;
     free(scope_to_pop);
-
-    PRINT_SCOPE_CHAIN("After Pop");
 }
 
 struct symbol *scope_lookup(char *name)
